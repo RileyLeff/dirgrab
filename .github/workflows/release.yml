@@ -43,7 +43,7 @@ jobs:
         # This step runs ONLY when a Pull Request labeled 'release-pr' is merged.
         # It performs the actual release: publishes crates to crates.io and pushes the Git tag.
         if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release-pr')
-        uses: release-plz/release-plz-action@v0.4
+        uses: release-plz/release-plz-action@v0.5.101
         with:
           command: release
           # Use a dedicated CRATES_IO_TOKEN secret for publishing
