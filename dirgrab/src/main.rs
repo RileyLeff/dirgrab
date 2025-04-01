@@ -28,7 +28,7 @@ struct Cli {
     #[arg(short = 'c', long, conflicts_with = "output")]
     clipboard: bool,
 
-    /// Disable the default inclusion of '--- FILE: <filename> ---' headers.
+    /// Disable the default inclusion of '--- FILE: `<filename>` ---' headers.
     #[arg(long)] // No short flag needed for disabling a default typically
     no_headers: bool,
 
