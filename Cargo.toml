@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "dirgrab",      # The binary crate
+    "dirgrab-lib",  # The library crate
+]
+resolver = "2" # Use the modern feature resolver
+
+# Optional: Define shared metadata for all workspace members
+[workspace.package]
+version = "0.1.0"
+authors = ["Your Name <your.email@example.com>"] # Replace with your info
+edition = "2021"
+license = "MIT OR Apache-2.0" # Choose your license(s)
+repository = "https://github.com/your-username/dirgrab-project" # Replace with your repo URL
+
+# Optional: Define shared dependencies
+# Dependencies listed here are not automatically inherited, but it's a place
+# to specify versions used across the workspace if needed.
+# [workspace.dependencies]
+# log = "0.4"
+# thiserror = "1.0"

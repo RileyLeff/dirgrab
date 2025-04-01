@@ -1,0 +1,19 @@
+[package]
+name = "dirgrab"
+# Inherit shared workspace metadata (defined in the root Cargo.toml)
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI tool to concatenate file contents from directories, respecting Git context."
+
+[dependencies]
+anyhow = "1.0.97"
+arboard = "3.4.1"
+clap = { version = "4.5.35", features = ["derive"] }
+# --- The Core Logic Library ---
+# Depend on the local library crate within the workspace
+dirgrab-lib = { path = "../dirgrab-lib", version = "0.1.0" } # Ensure version matches lib's or use workspace versioning
+env_logger = "0.11.7"
+log = "0.4.27"

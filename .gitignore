@@ -1,0 +1,63 @@
+# --- Rust / Cargo ---
+# Ignore build artifacts, compiled dependencies, and incremental build info.
+# The leading '/' ensures this only matches the target directory at the project root.
+/target/
+
+# Ignore Rust Analyzer specific files (if you use it with VS Code etc.)
+/.rustc_info.json
+/.cargo/config.toml # If you have local Cargo config overrides
+
+# --- Operating System Files ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux (less common to generate project-specific clutter)
+
+# --- IDE / Editor Configuration ---
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs (IntelliJ, CLion, RustRover, etc.)
+.idea/
+
+# Vim / Neovim
+*.swp
+.*.swp
+*.swo
+*~
+*.un~
+
+# Emacs
+*~
+#*#
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# --- Other Common Exclusions ---
+# Log files
+*.log
+
+# Environment variables file (often contains secrets)
+.env
+
+# Coverage reports (if you generate them)
+# /target/coverage/
+# lcov.info
+# *.profraw
+
+# --- Specific Tooling (Uncomment if needed) ---
+# Wasm builds (if applicable)
+# /pkg/

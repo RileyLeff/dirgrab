@@ -1,0 +1,16 @@
+[package]
+name = "dirgrab-lib"
+# Inherit workspace metadata (make sure these are defined in the root Cargo.toml)
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# Add a description specific to the library
+description = "Core library for dirgrab: concatenates file contents from directories, respecting Git context."
+
+[dependencies]
+ignore = "0.4.23"
+log = "0.4.27"
+thiserror = "2.0.12"
+walkdir = "2.5.0"
