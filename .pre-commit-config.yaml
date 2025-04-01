@@ -15,7 +15,7 @@ repos:
   hooks:
   - id: sync-readme
     name: Sync workspace README to lib
-    entry: bash -c 'cp README.md dirgrab-lib/README.md && git add dirgrab-lib/README.md'
+    entry: bash -c 'cp README.md dirgrab-lib/README.md && cp README.md dirgrab/README.md && git add dirgrab-lib/README.md'
     language: system
     pass_filenames: false # Don't pass filenames
     always_run: true # Run regardless of which files changed
