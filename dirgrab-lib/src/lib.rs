@@ -1,4 +1,4 @@
-#![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../Readme.md"))]
+#![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../README.md"))]
 
 use ignore::gitignore::GitignoreBuilder;
 use ignore::Match;
