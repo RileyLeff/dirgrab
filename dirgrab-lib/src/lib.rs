@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::collections::HashSet;
 use thiserror::Error;
 use walkdir::WalkDir;
 use ignore::gitignore::{GitignoreBuilder};
@@ -149,48 +150,65 @@ fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
          }
     }
 }
-
 /// Lists files using `git ls-files`.
 fn list_files_git(repo_root: &Path, config: &GrabConfig) -> GrabResult<Vec<PathBuf>> {
     debug!("Listing files using Git in root: {:?}", repo_root);
-    let mut args = vec!["ls-files", "-z"]; // Use -z for null termination
 
-    if config.include_untracked {
-        args.push("--others");
-        args.push("--exclude-standard");
-    }
-
+    // --- Build base arguments and exclusions ---
+    let base_args = ["ls-files", "-z"]; // Always use -z
     let exclude_pathspecs: Vec<String> = config.exclude_patterns.iter()
         .map(|p| format!(":!{}", p))
         .collect();
     let exclude_refs: Vec<&str> = exclude_pathspecs.iter().map(AsRef::as_ref).collect();
-    args.extend_from_slice(&exclude_refs);
 
+    // --- Collect files based on config ---
+    let mut combined_files = HashSet::new(); // Use HashSet for automatic deduplication
 
-    let command_str = format!("git {}", args.join(" "));
-    debug!("Running git ls-files command: {}", command_str);
-
-    let output = run_command("git", &args, repo_root)?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        error!("git ls-files command failed.\nStderr: {}\nStdout: {}", stderr, stdout);
-        return Err(GrabError::GitCommandError {
-            command: command_str,
-            stderr,
-            stdout,
-        });
+    // 1. Get TRACKED files
+    let mut tracked_args = base_args.to_vec();
+    tracked_args.extend_from_slice(&exclude_refs); // Apply exclusions to tracked files
+    let tracked_command_str = format!("git {}", tracked_args.join(" "));
+    debug!("Running git command for tracked files: {}", tracked_command_str);
+    let tracked_output = run_command("git", &tracked_args, repo_root)?;
+    if !tracked_output.status.success() {
+        // Handle error same way as before...
+        let stderr = String::from_utf8_lossy(&tracked_output.stderr).into_owned();
+        let stdout = String::from_utf8_lossy(&tracked_output.stdout).into_owned();
+        error!("git ls-files command (tracked) failed.\nStderr: {}\nStdout: {}", stderr, stdout);
+        return Err(GrabError::GitCommandError { command: tracked_command_str, stderr, stdout });
     }
-
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let files = stdout_str
+    String::from_utf8_lossy(&tracked_output.stdout)
         .split('\0')
         .filter(|s| !s.is_empty())
-        .map(|s| repo_root.join(s))
-        .collect();
+        .for_each(|s| { combined_files.insert(repo_root.join(s)); });
 
-    Ok(files)
+
+    // 2. Get UNTRACKED files (if requested)
+    if config.include_untracked {
+        let mut untracked_args = base_args.to_vec();
+        untracked_args.push("--others");
+        untracked_args.push("--exclude-standard"); // Respect .gitignore for untracked
+        untracked_args.extend_from_slice(&exclude_refs); // Apply exclusions to untracked files too
+        let untracked_command_str = format!("git {}", untracked_args.join(" "));
+        debug!("Running git command for untracked files: {}", untracked_command_str);
+        let untracked_output = run_command("git", &untracked_args, repo_root)?;
+
+        if !untracked_output.status.success() {
+             // Handle error same way as before...
+            let stderr = String::from_utf8_lossy(&untracked_output.stderr).into_owned();
+            let stdout = String::from_utf8_lossy(&untracked_output.stdout).into_owned();
+            error!("git ls-files command (untracked) failed.\nStderr: {}\nStdout: {}", stderr, stdout);
+            return Err(GrabError::GitCommandError { command: untracked_command_str, stderr, stdout });
+        }
+         String::from_utf8_lossy(&untracked_output.stdout)
+            .split('\0')
+            .filter(|s| !s.is_empty())
+            .for_each(|s| { combined_files.insert(repo_root.join(s)); });
+    }
+
+    // Convert HashSet back to Vec
+    let files_vec = combined_files.into_iter().collect();
+    Ok(files_vec)
 }
 
 
@@ -317,14 +335,15 @@ fn run_command(cmd: &str, args: &[&str], current_dir: &Path) -> GrabResult<Outpu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{self}; // Removed unused File
-    // Removed unused std::io::Write;
+    use std::collections::HashSet; // For order-independent comparison
+    use std::fs::{self};
+    use std::path::Path; // Ensure Path is imported directly for test cases
     use std::process::Command;
     use tempfile::{tempdir, TempDir};
-    use anyhow::Result; // Added use for Result in tests
+    use anyhow::Result;
 
     // Helper function to create a basic temporary directory setup
-    fn setup_test_dir() -> Result<(TempDir, PathBuf)> { // Use anyhow::Result
+    fn setup_test_dir() -> Result<(TempDir, PathBuf)> {
         let dir = tempdir()?;
         let path = dir.path().to_path_buf();
 
@@ -339,28 +358,36 @@ mod tests {
     }
 
     // Helper function to initialize a git repo in a temp dir
-    fn setup_git_repo(path: &Path) -> Result<()> { // Use anyhow::Result
+    // Returns Ok(true) if git repo was set up, Ok(false) if git command failed (e.g., not found)
+    fn setup_git_repo(path: &Path) -> Result<bool> {
         if Command::new("git").arg("--version").output().is_err() {
             eprintln!("WARN: 'git' command not found, skipping Git-related test setup.");
-            return Ok(());
+            return Ok(false); // Indicate git is not available
         }
 
         run_command_test("git", &["init", "-b", "main"], path)?;
         run_command_test("git", &["config", "user.email", "test@example.com"], path)?;
         run_command_test("git", &["config", "user.name", "Test User"], path)?;
-        run_command_test("git", &["add", "."], path)?;
+
+        // Add .gitignore *before* adding files
+        // Ignore logs, binary.dat, and specifically file1.txt
+        fs::write(path.join(".gitignore"), "*.log\nbinary.dat\nfile1.txt")?;
+
+        run_command_test("git", &["add", ".gitignore", "file2.rs", "subdir/another.txt"], path)?; // Add specific files + .gitignore
+        // Note: file1.txt, binary.dat, subdir/file3.log are NOT added initially
+
         run_command_test("git", &["commit", "-m", "Initial commit"], path)?;
 
+        // Create an untracked file (that isn't ignored)
         fs::write(path.join("untracked.txt"), "This file is not tracked.")?;
+        // Create an explicitly ignored file
+        fs::write(path.join("ignored.log"), "This should be ignored by git.")?; // Matches *.log
 
-        fs::write(path.join(".gitignore"), "*.log\nbinary.dat")?;
-        fs::write(path.join("ignored.log"), "This should be ignored by git.")?;
-
-        Ok(())
+        Ok(true) // Indicate git setup success
     }
 
      // Helper to run commands specifically for tests, panicking on failure
-     fn run_command_test(cmd: &str, args: &[&str], current_dir: &Path) -> Result<Output> { // Use anyhow::Result
+     fn run_command_test(cmd: &str, args: &[&str], current_dir: &Path) -> Result<Output> {
         println!("Running test command: {} {:?} in {:?}", cmd, args, current_dir);
         let output = Command::new(cmd)
             .args(args)
@@ -378,11 +405,22 @@ mod tests {
         Ok(output)
     }
 
+    // Helper to convert lists of relative paths to absolute paths in the test repo
+    // and then into a HashSet for comparison.
+    fn get_expected_set(base_path: &Path, relative_paths: &[&str]) -> HashSet<PathBuf> {
+        relative_paths.iter().map(|p| base_path.join(p)).collect()
+    }
+
+    fn assert_paths_eq(actual: Vec<PathBuf>, expected: HashSet<PathBuf>) {
+        let actual_set: HashSet<PathBuf> = actual.into_iter().collect();
+        assert_eq!(actual_set, expected);
+    }
+
 
     #[test]
-    fn test_detect_git_repo_inside() -> Result<()> { // Use anyhow::Result
+    fn test_detect_git_repo_inside() -> Result<()> {
         let (_dir, path) = setup_test_dir()?;
-        setup_git_repo(&path)?;
+        if !setup_git_repo(&path)? { return Ok(()); } // Skip if git not available
 
         let maybe_root = detect_git_repo(&path)?;
         assert!(maybe_root.is_some(), "Should detect git repo");
@@ -397,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_git_repo_outside() -> Result<()> { // Use anyhow::Result
+    fn test_detect_git_repo_outside() -> Result<()> {
         let (_dir, path) = setup_test_dir()?;
 
         let maybe_root = detect_git_repo(&path)?;
@@ -406,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_files_walkdir_no_exclude() -> Result<()> { // Use anyhow::Result
+    fn test_list_files_walkdir_no_exclude() -> Result<()> {
         let (_dir, path) = setup_test_dir()?;
         let config = GrabConfig {
             target_path: path.clone(),
@@ -417,30 +455,19 @@ mod tests {
 
         let files = list_files_walkdir(&path, &config)?;
 
-        let expected_files: Vec<PathBuf> = [
+        let expected_set = get_expected_set(&path, &[
             "file1.txt",
             "file2.rs",
             "subdir/file3.log",
             "subdir/another.txt",
             "binary.dat"
-        ]
-        .iter()
-        .map(|f| path.join(f))
-        .collect();
-
-        assert_eq!(files.len(), expected_files.len());
-        println!("Walkdir found files: {:?}", files);
-        // Improve check: sort and compare
-        let mut files_sorted = files; files_sorted.sort();
-        let mut expected_sorted = expected_files; expected_sorted.sort();
-        assert_eq!(files_sorted, expected_sorted);
-
-
+        ]);
+        assert_paths_eq(files, expected_set);
         Ok(())
     }
 
      #[test]
-     fn test_list_files_walkdir_with_exclude() -> Result<()> { // Use anyhow::Result
+     fn test_list_files_walkdir_with_exclude() -> Result<()> {
          let (_dir, path) = setup_test_dir()?;
          let config = GrabConfig {
              target_path: path.clone(),
@@ -451,27 +478,129 @@ mod tests {
 
          let files = list_files_walkdir(&path, &config)?;
 
-         let expected_files: Vec<PathBuf> = [
-             "file1.txt",
+        let expected_set = get_expected_set(&path, &[
+            "file1.txt",
+            "file2.rs",
+            "binary.dat"
+        ]);
+        assert_paths_eq(files, expected_set);
+        Ok(())
+     }
+
+    // --- NEW Git Tests ---
+
+    #[test]
+    fn test_list_files_git_tracked_only() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        if !setup_git_repo(&path)? { return Ok(()); } // Skip if git not available
+
+        let config = GrabConfig {
+            target_path: path.clone(), // Not directly used by list_files_git, but needed
+            add_headers: false,
+            exclude_patterns: vec![],
+            include_untracked: false, // Default: only tracked files
+        };
+
+        let files = list_files_git(&path, &config)?;
+
+        // Expected: Only files explicitly added and committed (.gitignore, file2.rs, subdir/another.txt)
+        let expected_set = get_expected_set(&path, &[
+            ".gitignore",
+            "file2.rs",
+            "subdir/another.txt",
+        ]);
+
+        println!("Git tracked files found: {:?}", files);
+        assert_paths_eq(files, expected_set);
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_files_git_include_untracked() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        if !setup_git_repo(&path)? { return Ok(()); } // Skip if git not available
+
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: false,
+            exclude_patterns: vec![],
+            include_untracked: true, // The key flag for this test
+        };
+
+        let files = list_files_git(&path, &config)?;
+
+        // Expected: tracked files + untracked.txt
+        // .gitignore'd files (file1.txt, binary.dat, *.log) should NOT be included
+        let expected_set = get_expected_set(&path, &[
+            ".gitignore",
+            "file2.rs",
+            "subdir/another.txt",
+            "untracked.txt", // The untracked file
+        ]);
+
+        println!("Git tracked+untracked files found: {:?}", files);
+        assert_paths_eq(files, expected_set);
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_files_git_with_exclude() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        if !setup_git_repo(&path)? { return Ok(()); } // Skip if git not available
+
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: false,
+            // Exclude Rust files and everything in subdir/
+            exclude_patterns: vec!["*.rs".to_string(), "subdir/".to_string()],
+            include_untracked: false, // Tracked only
+        };
+
+        let files = list_files_git(&path, &config)?;
+
+        // Expected: .gitignore (file2.rs and subdir/another.txt are excluded)
+        let expected_set = get_expected_set(&path, &[
+            ".gitignore",
+        ]);
+
+        println!("Git tracked files (with exclude) found: {:?}", files);
+        assert_paths_eq(files, expected_set);
+        Ok(())
+    }
+
+     #[test]
+     fn test_list_files_git_untracked_with_exclude() -> Result<()> {
+         let (_dir, path) = setup_test_dir()?;
+         if !setup_git_repo(&path)? { return Ok(()); } // Skip if git not available
+
+         let config = GrabConfig {
+             target_path: path.clone(),
+             add_headers: false,
+             // Exclude .txt files
+             exclude_patterns: vec!["*.txt".to_string()],
+             include_untracked: true, // Include untracked
+         };
+
+         let files = list_files_git(&path, &config)?;
+
+         // Expected: .gitignore, file2.rs
+         // Excluded: subdir/another.txt, untracked.txt
+         let expected_set = get_expected_set(&path, &[
+             ".gitignore",
              "file2.rs",
-             "binary.dat"
-         ]
-         .iter()
-         .map(|f| path.join(f))
-         .collect();
+         ]);
 
-         assert_eq!(files.len(), expected_files.len()); // Check length first
-         println!("Walkdir (with exclude) found files: {:?}", files);
-         // Improve check: sort and compare
-         let mut files_sorted = files; files_sorted.sort();
-         let mut expected_sorted = expected_files; expected_sorted.sort();
-         assert_eq!(files_sorted, expected_sorted);
-
+         println!("Git tracked+untracked (with exclude) files found: {:?}", files);
+         assert_paths_eq(files, expected_set);
          Ok(())
      }
 
+
+    // --- End of NEW Git Tests ---
+
+
     #[test]
-    fn test_process_files_no_headers_skip_binary() -> Result<()> { // Use anyhow::Result
+    fn test_process_files_no_headers_skip_binary() -> Result<()> {
          let (_dir, path) = setup_test_dir()?;
          let files_to_process = vec![
              path.join("file1.txt"),
@@ -489,7 +618,7 @@ mod tests {
     }
 
      #[test]
-     fn test_process_files_with_headers() -> Result<()> { // Use anyhow::Result
+     fn test_process_files_with_headers() -> Result<()> {
          let (_dir, path) = setup_test_dir()?;
          let files_to_process = vec![
              path.join("file1.txt"),
@@ -502,7 +631,7 @@ mod tests {
 
          let expected_content = format!(
             "--- FILE: {} ---\nContent of file 1.\n\n--- FILE: {} ---\nfn main() {{}}\n\n",
-            Path::new("file1.txt").display(),
+            Path::new("file1.txt").display(), // Use Path::new for consistent display across OS
             Path::new("file2.rs").display()
          );
 
@@ -510,7 +639,4 @@ mod tests {
 
          Ok(())
      }
-
-    // TODO: Add tests for list_files_git
-
 } // End of mod tests
