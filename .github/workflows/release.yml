@@ -29,7 +29,7 @@ jobs:
         # It checks if any workspace members have changed since the last release.
         # If yes, it bumps versions, updates changelogs, and creates/updates a "Release PR".
         if: github.event_name == 'push'
-        uses: release-plz/release-plz-action@v0.4 # Check for latest version
+        uses: release-plz/release-plz-action@v0.5.101 # Check for latest version
         with:
           command: release-pr
           # GITHUB_TOKEN is sufficient for creating PRs and pushing tags
