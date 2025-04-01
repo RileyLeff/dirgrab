@@ -73,4 +73,4 @@ jobs:
       run: cargo build --release --all-targets
 
     - name: Build documentation
-      run: cargo doc --no-deps --all-targets # --no-deps speeds it up slightly
+      run: cargo doc --no-deps

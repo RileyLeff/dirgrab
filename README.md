@@ -2,9 +2,8 @@
 
 [![Crates.io](https://img.shields.io/crates/v/dirgrab.svg)](https://crates.io/crates/dirgrab) <!-- Update link/version later -->
 [![Docs.rs](https://docs.rs/dirgrab-lib/badge.svg)](https://docs.rs/dirgrab-lib) <!-- Update link/version later -->
-<!-- Add build status badge from GitHub Actions if you set that up -->
 
-`dirgrab` is a simple command-line tool to grab the content of files within a directory and concatenate them, suitable for copying code snippets, project contexts, or feeding into language models.
+`dirgrab` is a simple command-line tool to grab the content of files within a directory and concatenate them, suitable for feeding project contexts into language models.
 
 It intelligently uses Git context when available (`git ls-files`) to only include tracked files (respecting `.gitignore`), but also works seamlessly on plain directories.
 
