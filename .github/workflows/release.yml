@@ -1,0 +1,53 @@
+# .github/workflows/release.yml
+name: Release dirgrab
+
+on:
+  push:
+    branches:
+      - main # Or your default branch
+  pull_request:
+    types: [closed] # Trigger when a PR is closed
+
+jobs:
+  release-plz:
+    name: Release-plz
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # We need full history for release-plz to compute changes
+          # and a token to push tags and create PRs
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }} # Use default GITHUB_TOKEN for PRs/tags
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz release-pr
+        # This step runs on every push to main.
+        # It checks if any workspace members have changed since the last release.
+        # If yes, it bumps versions, updates changelogs, and creates/updates a "Release PR".
+        if: github.event_name == 'push'
+        uses: release-plz/release-plz-action@v0.4 # Check for latest version
+        with:
+          command: release-pr
+          # GITHUB_TOKEN is sufficient for creating PRs and pushing tags
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: specify registry if not crates.io
+          # registry: my-registry
+          # Optional: use 'cargo-semver-checks' for semver validation (requires installation)
+          # cargo_semver_checks_enabled: true
+
+      - name: Run release-plz release
+        # This step runs ONLY when a Pull Request labeled 'release-pr' is merged.
+        # It performs the actual release: publishes crates to crates.io and pushes the Git tag.
+        if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release-pr')
+        uses: release-plz/release-plz-action@v0.4
+        with:
+          command: release
+          # Use a dedicated CRATES_IO_TOKEN secret for publishing
+          # DO NOT use GITHUB_TOKEN for publishing to crates.io
+          registry_token: ${{ secrets.CRATES_IO_TOKEN }}
+          # Optional: specify registry if not crates.io
+          # registry: my-registry

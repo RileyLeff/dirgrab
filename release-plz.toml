@@ -1,0 +1,8 @@
+repo_url = "https://github.com/rileyleff/dirgrab"
+
+[changelog]
+conventional_commits = true
+
+[workspace]
+changelog_path = "CHANGELOG.md"
+allow_breaking = false
