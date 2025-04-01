@@ -36,7 +36,6 @@ struct Cli {
     // If someone uses `-H`, clap will likely give an unknown argument error,
     // which is acceptable. Alternatively, we could keep -H as a hidden/deprecated alias
     // that does nothing, but simply removing it is cleaner.
-
     /// Add patterns to exclude files or directories. Can be used multiple times.
     /// Uses .gitignore glob syntax. Examples: -e "*.log" -e "target/"
     /// In Git mode, these are added to 'git ls-files'.
@@ -58,8 +57,8 @@ fn main() -> Result<()> {
 
     // --- Initialize Logging ---
     let log_level = match cli.verbose {
-        0 => LevelFilter::Warn, // Default: Show warnings and errors
-        1 => LevelFilter::Info, // -v: Show info, warnings, errors
+        0 => LevelFilter::Warn,  // Default: Show warnings and errors
+        1 => LevelFilter::Info,  // -v: Show info, warnings, errors
         2 => LevelFilter::Debug, // -vv: Show debug, info, warnings, errors
         _ => LevelFilter::Trace, // -vvv and more: Show everything
     };
@@ -87,11 +86,10 @@ fn main() -> Result<()> {
         info!("File headers will be excluded (--no-headers specified).");
     }
 
-
     // --- Create Library Config ---
     let config = GrabConfig {
-        target_path, // Use the determined path
-        add_headers, // Use the calculated value based on --no-headers
+        target_path,                            // Use the determined path
+        add_headers,                            // Use the calculated value based on --no-headers
         exclude_patterns: cli.exclude_patterns, // Pass exclusions from CLI
         include_untracked: cli.include_untracked,
     };
