@@ -1,0 +1,76 @@
+# .github/workflows/ci.yml
+name: Rust CI
+
+on:
+  push:
+    branches: [ main ] # Or your default branch name
+  pull_request:
+    branches: [ main ] # Or your default branch name
+
+env:
+  CARGO_TERM_COLOR: always # Make cargo output colorful in logs
+
+jobs:
+  check_and_test:
+    name: Check & Test
+    # Run on multiple platforms
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Optionally test multiple rust versions
+        # rust: [stable, beta]
+        # include:
+        #   - os: ubuntu-latest
+        #     rust: nightly # Allow nightly to fail without failing the whole job
+        # continue-on-error: ${{ matrix.rust == 'nightly' }}
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain (stable)
+      uses: dtolnay/rust-toolchain@stable
+      # Alternatively, use actions-rust-lang/setup-rust-toolchain for more options
+
+    # Needed for git commands in tests on GitHub runners
+    - name: Configure Git User (for tests)
+      if: runner.os != 'Windows' # Git config slightly different on Windows sometimes
+      run: |
+        git config --global user.email "ci@github.com"
+        git config --global user.name "CI Bot"
+    - name: Configure Git User (Windows - for tests)
+      if: runner.os == 'Windows'
+      run: |
+        git config --global user.email "ci@github.com"
+        git config --global user.name "CI Bot"
+
+    # Cache dependencies
+    - name: Cache Cargo registry and index
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/ # Cache build artifacts too
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Check formatting
+      run: cargo fmt --all --check
+
+    - name: Run Clippy
+      run: cargo clippy --all-targets -- -D warnings
+
+    - name: Run tests
+      run: cargo test --all-targets
+
+    - name: Build release
+      run: cargo build --release --all-targets
+
+    - name: Build documentation
+      run: cargo doc --no-deps --all-targets # --no-deps speeds it up slightly
