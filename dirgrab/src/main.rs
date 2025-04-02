@@ -1,3 +1,5 @@
+// --- FILE: dirgrab/src/main.rs ---
+
 use anyhow::{Context, Result}; // Use anyhow for easy error handling in the binary
 use arboard::Clipboard;
 use clap::Parser;
@@ -12,7 +14,7 @@ use std::path::PathBuf;
     author,
     version,
     about = "Concatenates files from a directory, respecting Git context. Includes file headers by default.",
-    long_about = "Dirgrab walks a directory, finds relevant files (using git ls-files if in a Git repo, otherwise walking the directory), applies exclusions, and concatenates their content to stdout, a file, or the clipboard.\n\nBy default, the content of each file is preceded by a '--- FILE: <filename> ---' header. Use --no-headers to disable this."
+    long_about = "Dirgrab walks a directory, finds relevant files (using git ls-files if in a Git repo, otherwise walking the directory), applies exclusions, and concatenates their content to stdout, a file, or the clipboard.\n\nBy default, the content of each file is preceded by a '--- FILE: <filename> ---' header. Use --no-headers to disable this.\nBy default, 'dirgrab.txt' is excluded. Use --include-default-output to override this specific exclusion." // Updated long_about
 )]
 struct Cli {
     /// Optional path to the repository or directory to process.
@@ -32,10 +34,6 @@ struct Cli {
     #[arg(long)] // No short flag needed for disabling a default typically
     no_headers: bool,
 
-    // Note: We removed the original '-H, --headers' flag as it's now the default.
-    // If someone uses `-H`, clap will likely give an unknown argument error,
-    // which is acceptable. Alternatively, we could keep -H as a hidden/deprecated alias
-    // that does nothing, but simply removing it is cleaner.
     /// Add patterns to exclude files or directories. Can be used multiple times.
     /// Uses .gitignore glob syntax. Examples: -e "*.log" -e "target/"
     /// In Git mode, these are added to 'git ls-files'.
@@ -47,6 +45,12 @@ struct Cli {
     #[arg(short = 'u', long)]
     include_untracked: bool,
 
+    // --- Start Modification (B) ---
+    /// Include the default output file ('dirgrab.txt') if it exists and isn't otherwise excluded.
+    /// By default, 'dirgrab.txt' is always excluded.
+    #[arg(long)]
+    include_default_output: bool,
+    // --- End Modification (B) ---
     /// Enable verbose output. Use -v for info, -vv for debug, -vvv for trace.
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -92,6 +96,9 @@ fn main() -> Result<()> {
         add_headers,                            // Use the calculated value based on --no-headers
         exclude_patterns: cli.exclude_patterns, // Pass exclusions from CLI
         include_untracked: cli.include_untracked,
+        // --- Start Modification (B) ---
+        include_default_output: cli.include_default_output, // Pass the new flag
+                                                            // --- End Modification (B) ---
     };
 
     // --- Call Library ---
@@ -99,7 +106,9 @@ fn main() -> Result<()> {
         Ok(content) => content,
         Err(e) => {
             error!("Error during dirgrab operation: {}", e);
-            return Err(e.into()); // Convert GrabError to anyhow::Error
+            // Consider improving error presentation later if needed
+            // For now, just return the underlying error converted to anyhow
+            return Err(e.into());
         }
     };
 
