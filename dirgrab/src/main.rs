@@ -13,8 +13,8 @@ use std::path::PathBuf;
 #[command(
     author,
     version,
-    about = "Concatenates files from a directory, respecting Git context. Includes file headers by default.",
-    long_about = "Dirgrab walks a directory, finds relevant files (using git ls-files if in a Git repo, otherwise walking the directory), applies exclusions, and concatenates their content to stdout, a file, or the clipboard.\n\nBy default, the content of each file is preceded by a '--- FILE: <filename> ---' header. Use --no-headers to disable this.\nBy default, 'dirgrab.txt' is excluded. Use --include-default-output to override this specific exclusion.\nUse --no-git to ignore Git context entirely and treat the target as a plain directory.\nUse --include-tree to prepend a directory structure overview.\n\nOutput size and word count are printed to stderr upon completion."
+    about = "Concatenates files from a directory, respecting Git context. Includes file headers and directory tree by default.",
+    long_about = "Dirgrab walks a directory, finds relevant files (using git ls-files if in a Git repo, otherwise walking the directory), applies exclusions, and concatenates their content to stdout, a file, or the clipboard.\n\nBy default, a directory structure overview is prepended. Use --no-tree to disable this.\nBy default, the content of each file is preceded by a '--- FILE: <filename> ---' header. Use --no-headers to disable this.\nBy default, 'dirgrab.txt' is excluded. Use --include-default-output to override this specific exclusion.\nUse --no-git to ignore Git context entirely and treat the target as a plain directory.\n\nUse -s or --stats to print output size and word count to stderr upon completion."
 )]
 struct Cli {
     /// Optional path to the repository or directory to process.
@@ -23,7 +23,15 @@ struct Cli {
     target_path: Option<PathBuf>,
 
     /// Write output to a file instead of stdout.
-    #[arg(short = 'o', long, conflicts_with = "clipboard")]
+    /// If the flag is provided without a filename (e.g., `-o`), defaults to 'dirgrab.txt'.
+    #[arg(
+        short = 'o',
+        long,
+        value_name = "FILE",
+        num_args = 0..=1,
+        default_missing_value = "dirgrab.txt",
+        conflicts_with = "clipboard"
+    )]
     output: Option<PathBuf>,
 
     /// Copy output to the system clipboard instead of stdout or a file.
@@ -33,6 +41,10 @@ struct Cli {
     /// Disable the default inclusion of '--- FILE: `<filename>` ---' headers.
     #[arg(long)]
     no_headers: bool,
+
+    /// Disable the default inclusion of the directory structure overview.
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    no_tree: bool,
 
     /// Add patterns to exclude files or directories. Can be used multiple times.
     /// Uses .gitignore glob syntax. Examples: -e "*.log" -e "target/"
@@ -53,9 +65,9 @@ struct Cli {
     #[arg(long)]
     no_git: bool,
 
-    /// Prepend an indented directory structure overview to the output.
-    #[arg(long)]
-    include_tree: bool,
+    /// Print output size (bytes) and word count to stderr upon completion.
+    #[arg(short = 's', long, action = clap::ArgAction::SetTrue)]
+    print_stats: bool,
 
     /// Enable verbose output. Use -v for info, -vv for debug, -vvv for trace.
     #[arg(short, long, action = clap::ArgAction::Count)]
@@ -92,6 +104,14 @@ fn main() -> Result<()> {
         info!("File headers will be excluded (--no-headers specified).");
     }
 
+    // Determine Tree Inclusion (based on absence of --no-tree)
+    let include_tree = !cli.no_tree;
+    if include_tree {
+        info!("Directory tree will be included (default).");
+    } else {
+        info!("Directory tree will be excluded (--no-tree specified).");
+    }
+
     // Create Library Config - passing all the flags
     let config = GrabConfig {
         target_path,
@@ -100,7 +120,8 @@ fn main() -> Result<()> {
         include_untracked: cli.include_untracked,
         include_default_output: cli.include_default_output,
         no_git: cli.no_git,
-        include_tree: cli.include_tree,
+        include_tree,
+        // convert_pdf: cli.convert_pdf, // Placeholder for Phase 2
     };
 
     // Call Library
@@ -108,15 +129,17 @@ fn main() -> Result<()> {
         Ok(content) => content,
         Err(e) => {
             error!("Error during dirgrab operation: {}", e);
-            return Err(e.into()); // Convert library error to anyhow error
+            return Err(e.into());
         }
     };
 
     // Check if content is empty *after* potential tree generation
     if combined_content.is_empty() {
         info!("No content was generated.");
-        // Print stats even if empty (0 bytes, 0 words)
-        eprintln!("Output Size: 0 bytes, 0 words");
+        // Print stats even if empty, but only if requested
+        if cli.print_stats {
+            eprintln!("Output Size: 0 bytes, 0 words");
+        }
         return Ok(());
     }
 
@@ -124,14 +147,12 @@ fn main() -> Result<()> {
     let output_destination = if cli.clipboard {
         info!("Copying output to clipboard...");
         let mut clipboard = Clipboard::new().context("Failed to initialize clipboard")?;
-        // Pass reference to avoid moving combined_content
         clipboard
             .set_text(&combined_content)
             .context("Failed to copy content to clipboard")?;
         info!("Successfully copied content to clipboard.");
         "Clipboard".to_string()
     } else if let Some(ref output_path) = cli.output {
-        // Borrow output_path
         info!("Writing output to file: {:?}", output_path);
         let mut file = File::create(output_path)
             .with_context(|| format!("Failed to create output file: {:?}", output_path))?;
@@ -150,14 +171,16 @@ fn main() -> Result<()> {
         "stdout".to_string()
     };
 
-    // Calculate and print stats to stderr *after* successful output
-    let byte_count = combined_content.len();
-    // Simple word count based on whitespace splitting
-    let word_count = combined_content.split_whitespace().count();
-    eprintln!(
-        "Output Size (to {}): {} bytes, {} words",
-        output_destination, byte_count, word_count
-    );
+    // Calculate and print stats to stderr *only if requested*
+    if cli.print_stats {
+        let byte_count = combined_content.len();
+        // Simple word count based on whitespace splitting
+        let word_count = combined_content.split_whitespace().count();
+        eprintln!(
+            "Output Size (to {}): {} bytes, {} words",
+            output_destination, byte_count, word_count
+        );
+    }
 
     Ok(())
 }
