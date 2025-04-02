@@ -44,12 +44,19 @@ pub struct GrabConfig {
     /// If operating in Git mode, set this to true to include untracked files
     /// (files present in the working directory but not added to the index).
     /// This still respects `.gitignore` and the `exclude_patterns`.
-    /// This setting has no effect if the `target_path` is not part of a Git repository.
+    /// This setting has no effect if the `target_path` is not part of a Git repository,
+    /// or if `no_git` is true.
     pub include_untracked: bool,
 
     /// If true, the default exclusion for `dirgrab.txt` will *not* be applied.
     /// Use this flag only if you specifically need to include a file named `dirgrab.txt`.
     pub include_default_output: bool,
+
+    /// If true, forces dirgrab to ignore any Git repository context and treat the
+    /// target path purely as a filesystem directory. This disables `.gitignore`
+    /// processing and the effect of `include_untracked`. User-provided exclude
+    /// patterns (`-e`) are still respected.
+    pub no_git: bool,
 }
 
 // --- Public Error Enum ---
@@ -79,7 +86,6 @@ pub enum GrabError {
     /// Contains the command string, stderr, and stdout output for debugging.
     #[error("Failed to execute git command: {command:?}\n  stderr: {stderr}\n  stdout: {stdout}")]
     GitCommandError {
-        // <-- Restore definition
         command: String,
         stderr: String,
         stdout: String,
@@ -113,7 +119,7 @@ pub enum GrabError {
     /// in `GrabConfig::exclude_patterns`. This might happen if a pattern has
     /// invalid syntax according to the `ignore` crate.
     #[error("Failed to build glob pattern matcher: {0}")]
-    GlobMatcherBuildError(#[source] ignore::Error), // <-- Restore definition
+    GlobMatcherBuildError(#[source] ignore::Error),
 
     /// An error occurred during directory traversal when operating in non-Git mode,
     /// likely related to permissions or accessing a specific directory entry.
@@ -181,12 +187,11 @@ pub type GrabResult<T> = Result<T, GrabError>;
 /// fn run_dirgrab() -> Result<String, GrabError> {
 ///     let config = GrabConfig {
 ///         target_path: PathBuf::from("./my_project"), // Target a specific project
-///         add_headers: false,                        // Don't include headers
+///         add_headers: true,                         // Include headers
 ///         exclude_patterns: vec!["target/".to_string()], // Exclude the target dir
-///         include_untracked: true,                   // Include untracked files if it's a Git repo
-///         include_default_output: false, // Do not include dirgrab.txt
-///         // Add other fields as needed by the evolving GrabConfig
-///         // no_git: false, // Example for Item C
+///         include_untracked: false,                  // Only tracked files (if Git)
+///         include_default_output: false,             // Exclude dirgrab.txt
+///         no_git: false,                             // Use Git context if available
 ///         // include_tree: false, // Example for Item D
 ///     };
 ///
@@ -209,12 +214,10 @@ pub type GrabResult<T> = Result<T, GrabError>;
 /// }
 /// ```
 pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
-    // <-- Restore body
     info!("Starting dirgrab operation with config: {:?}", config);
 
     // Canonicalize cleans the path and checks existence implicitly via OS call
     let target_path = config.target_path.canonicalize().map_err(|e| {
-        // Provide a slightly better error if the root cause is NotFound
         if e.kind() == io::ErrorKind::NotFound {
             GrabError::TargetPathNotFound(config.target_path.clone())
         } else {
@@ -226,19 +229,28 @@ pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
     })?;
     debug!("Canonical target path: {:?}", target_path);
 
-    // 1. Detect Git repository and root
-    let git_repo_root = detect_git_repo(&target_path)?;
-
-    // 2. List files based on mode (Git vs. Non-Git)
-    let files_to_process = match &git_repo_root {
-        Some(root) => {
-            info!("Operating in Git mode. Repo root: {:?}", root);
-            list_files_git(root, config)?
-        }
-        None => {
-            info!("Operating in Non-Git mode. Target path: {:?}", target_path);
-            list_files_walkdir(&target_path, config)?
-        }
+    // Determine file listing mode and potential repo root based on no_git flag
+    let (files_to_process, maybe_repo_root) = if config.no_git {
+        // Force non-Git mode (walkdir)
+        info!("Ignoring Git context due to --no-git flag.");
+        let files = list_files_walkdir(&target_path, config)?;
+        // When forcing non-git, there's no repo root concept for headers
+        (files, None)
+    } else {
+        // Default behavior: Detect Git repo and choose mode
+        let git_repo_root = detect_git_repo(&target_path)?;
+        let files = match &git_repo_root {
+            Some(root) => {
+                info!("Operating in Git mode. Repo root: {:?}", root);
+                list_files_git(root, config)?
+            }
+            None => {
+                info!("Operating in Non-Git mode. Target path: {:?}", target_path);
+                list_files_walkdir(&target_path, config)?
+            }
+        };
+        // Pass the detected repo root (if any) for header relativization
+        (files, git_repo_root)
     };
 
     info!("Found {} files to process.", files_to_process.len());
@@ -247,44 +259,39 @@ pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
         return Ok(String::new()); // Return empty string if no files
     }
 
-    // 3. Process (read and concatenate) the files
+    // Process (read and concatenate) the files, passing the canonical target path for non-git relativization
     process_files(
         &files_to_process,
         config.add_headers,
-        git_repo_root.as_deref(),
+        maybe_repo_root.as_deref(), // Use the root determined above (if any)
+        &target_path,               // Pass the canonical target path for fallback relativization
     )
 }
 
 // --- Helper Function Implementations ---
-// (Private functions below - no public API doc comments needed,
-// but internal // comments can clarify complex logic if necessary)
 
 /// Checks if the path is inside a Git repository and returns the repo root if true.
 fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
-    // <-- Restore body
     let command_str = "git rev-parse --show-toplevel";
     debug!(
         "Detecting git repo by running '{}' in path: {:?}",
         command_str, path
     );
 
-    // Attempt to run git command, handle specific "not found" error gracefully
     let output = match run_command("git", &["rev-parse", "--show-toplevel"], path) {
         Ok(output) => output,
         Err(GrabError::GitExecutionError { ref source, .. })
             if source.kind() == io::ErrorKind::NotFound =>
         {
-            // Git command not found, definitely not a Git repo context for us
             info!("'git' command not found. Assuming Non-Git mode.");
             return Ok(None);
         }
-        Err(e) => return Err(e), // Propagate other execution errors
+        Err(e) => return Err(e),
     };
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !stdout.is_empty() {
-            // Attempt to canonicalize the reported root path for consistency
             let root_path =
                 PathBuf::from(stdout)
                     .canonicalize()
@@ -295,7 +302,6 @@ fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
             debug!("Detected Git repo root: {:?}", root_path);
             Ok(Some(root_path))
         } else {
-            // Command succeeded but gave empty output? Unexpected. Treat as non-repo.
             warn!(
                 "'{}' succeeded but returned empty output in {:?}. Treating as Non-Git mode.",
                 command_str, path
@@ -304,7 +310,6 @@ fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
         }
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Check stderr for common messages indicating not a git repo
         if stderr.contains("not a git repository")
             || stderr.contains("fatal: detected dubious ownership in repository at")
         {
@@ -314,14 +319,12 @@ fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
             );
             Ok(None)
         } else {
-            // A different git error occurred
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             error!(
                 "Git command '{}' failed unexpectedly.\nStderr: {}\\nStdout: {}",
                 command_str, stderr, stdout
             );
             Err(GrabError::GitCommandError {
-                // Now references a defined variant
                 command: command_str.to_string(),
                 stderr: stderr.into_owned(),
                 stdout,
@@ -334,16 +337,14 @@ fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
 fn list_files_git(repo_root: &Path, config: &GrabConfig) -> GrabResult<Vec<PathBuf>> {
     debug!("Listing files using Git in root: {:?}", repo_root);
 
-    let base_args = ["ls-files", "-z"]; // Always use null termination for safe parsing
+    let base_args = ["ls-files", "-z"];
     let exclude_pathspecs: Vec<String> = config
         .exclude_patterns
         .iter()
-        .map(|p| format!(":!{}", p)) // Format as git pathspec exclusions
+        .map(|p| format!(":!{}", p))
         .collect();
 
-    // Combine default and user exclusions
     let mut all_exclude_refs: Vec<&str> = Vec::new();
-    // Only add the default exclusion if the override flag is NOT set
     if !config.include_default_output {
         let default_exclude_pathspec = ":!dirgrab.txt";
         all_exclude_refs.push(default_exclude_pathspec);
@@ -351,13 +352,13 @@ fn list_files_git(repo_root: &Path, config: &GrabConfig) -> GrabResult<Vec<PathB
     } else {
         info!("Default exclusion for 'dirgrab.txt' is disabled by --include-default-output flag.");
     }
-    all_exclude_refs.extend(exclude_pathspecs.iter().map(|s| s.as_str())); // Add user patterns
+    all_exclude_refs.extend(exclude_pathspecs.iter().map(|s| s.as_str()));
 
-    let mut combined_files = HashSet::new(); // Use HashSet for automatic deduplication
+    let mut combined_files = HashSet::new();
 
-    // 1. Get TRACKED files (respecting command-line excludes)
+    // Tracked files
     let mut tracked_args = base_args.to_vec();
-    tracked_args.extend_from_slice(&all_exclude_refs); // Use the combined exclusions
+    tracked_args.extend_from_slice(&all_exclude_refs);
     let tracked_command_str = format!("git {}", tracked_args.join(" "));
     debug!(
         "Running git command for tracked files: {}",
@@ -372,13 +373,11 @@ fn list_files_git(repo_root: &Path, config: &GrabConfig) -> GrabResult<Vec<PathB
             stderr, stdout
         );
         return Err(GrabError::GitCommandError {
-            // Now references a defined variant
             command: tracked_command_str,
             stderr,
             stdout,
         });
     }
-    // Add tracked files found to the set
     String::from_utf8_lossy(&tracked_output.stdout)
         .split('\0')
         .filter(|s| !s.is_empty())
@@ -386,19 +385,18 @@ fn list_files_git(repo_root: &Path, config: &GrabConfig) -> GrabResult<Vec<PathB
             combined_files.insert(repo_root.join(s));
         });
 
-    // 2. Get UNTRACKED files (if requested, respecting .gitignore and command-line excludes)
+    // Untracked files (if requested)
     if config.include_untracked {
         let mut untracked_args = base_args.to_vec();
-        untracked_args.push("--others"); // Show untracked files
-        untracked_args.push("--exclude-standard"); // IMPORTANT: Still respect .gitignore rules
-        untracked_args.extend_from_slice(&all_exclude_refs); // Apply combined excludes too
+        untracked_args.push("--others");
+        untracked_args.push("--exclude-standard");
+        untracked_args.extend_from_slice(&all_exclude_refs);
         let untracked_command_str = format!("git {}", untracked_args.join(" "));
         debug!(
             "Running git command for untracked files: {}",
             untracked_command_str
         );
         let untracked_output = run_command("git", &untracked_args, repo_root)?;
-
         if !untracked_output.status.success() {
             let stderr = String::from_utf8_lossy(&untracked_output.stderr).into_owned();
             let stdout = String::from_utf8_lossy(&untracked_output.stdout).into_owned();
@@ -407,13 +405,11 @@ fn list_files_git(repo_root: &Path, config: &GrabConfig) -> GrabResult<Vec<PathB
                 stderr, stdout
             );
             return Err(GrabError::GitCommandError {
-                // Now references a defined variant
                 command: untracked_command_str,
                 stderr,
                 stdout,
             });
         }
-        // Add untracked files found to the set (duplicates are handled by HashSet)
         String::from_utf8_lossy(&untracked_output.stdout)
             .split('\0')
             .filter(|s| !s.is_empty())
@@ -422,9 +418,7 @@ fn list_files_git(repo_root: &Path, config: &GrabConfig) -> GrabResult<Vec<PathB
             });
     }
 
-    // Convert the combined set back to a Vec for the return type
-    let files_vec = combined_files.into_iter().collect();
-    Ok(files_vec)
+    Ok(combined_files.into_iter().collect())
 }
 
 /// Lists files using `walkdir` when not in a Git repository. Applies command-line excludes.
@@ -432,10 +426,8 @@ fn list_files_walkdir(target_path: &Path, config: &GrabConfig) -> GrabResult<Vec
     debug!("Listing files using walkdir starting at: {:?}", target_path);
     let mut files = Vec::new();
 
-    // Build the matcher for command-line exclusion patterns
     let mut exclude_builder = GitignoreBuilder::new(target_path);
 
-    // Add the default exclusion for "dirgrab.txt" first, only if not overridden
     if !config.include_default_output {
         if let Err(e) = exclude_builder.add_line(None, "dirgrab.txt") {
             warn!("Failed to add default exclusion pattern 'dirgrab.txt': {}. This exclusion might not apply.", e);
@@ -446,7 +438,6 @@ fn list_files_walkdir(target_path: &Path, config: &GrabConfig) -> GrabResult<Vec
         info!("Default exclusion for 'dirgrab.txt' is disabled by --include-default-output flag.");
     }
 
-    // Add user-provided exclusion patterns
     for pattern in &config.exclude_patterns {
         if let Err(e) = exclude_builder.add_line(None, pattern) {
             error!(
@@ -457,9 +448,8 @@ fn list_files_walkdir(target_path: &Path, config: &GrabConfig) -> GrabResult<Vec
     }
     let exclude_matcher = exclude_builder
         .build()
-        .map_err(GrabError::GlobMatcherBuildError)?; // Now references a defined variant
+        .map_err(GrabError::GlobMatcherBuildError)?;
 
-    // Walk the directory
     for entry_result in WalkDir::new(target_path) {
         let entry = match entry_result {
             Ok(entry) => entry,
@@ -478,12 +468,19 @@ fn list_files_walkdir(target_path: &Path, config: &GrabConfig) -> GrabResult<Vec
 
         let path = entry.path();
 
-        // Only process files
+        // Skip directories and other non-files
         if !entry.file_type().is_file() {
+            // Also explicitly skip the .git directory if walkdir happens upon it
+            // (though it shouldn't typically list its contents unless target_path *is* .git)
+            if path.file_name() == Some(std::ffi::OsStr::new(".git")) && entry.file_type().is_dir()
+            {
+                debug!("Skipping .git directory during walkdir");
+                continue;
+            }
             continue;
         }
 
-        // Apply exclusion rules using the command-line patterns
+        // Apply exclusion rules using the patterns
         match exclude_matcher.matched_path_or_any_parents(path, false) {
             Match::None | Match::Whitelist(_) => {
                 files.push(path.to_path_buf());
@@ -493,7 +490,7 @@ fn list_files_walkdir(target_path: &Path, config: &GrabConfig) -> GrabResult<Vec
                 continue;
             }
         }
-    } // End walkdir loop
+    }
 
     Ok(files)
 }
@@ -501,69 +498,76 @@ fn list_files_walkdir(target_path: &Path, config: &GrabConfig) -> GrabResult<Vec
 /// Reads a list of files, concatenates their UTF-8 content, optionally adding headers.
 /// Skips non-UTF8 files and files with read errors, logging warnings.
 fn process_files(
-    // <-- Restore body
     files: &[PathBuf],
     add_headers: bool,
     repo_root: Option<&Path>,
+    target_path: &Path, // Added parameter for non-git relative paths
 ) -> GrabResult<String> {
     debug!("Processing {} files.", files.len());
-    let mut combined_content = String::with_capacity(files.len() * 1024); // Preallocate estimate
-    let mut buffer = Vec::new(); // Reusable buffer for reading
+    let mut combined_content = String::with_capacity(files.len() * 1024);
+    let mut buffer = Vec::new();
 
     for file_path in files {
         debug!("Processing file: {:?}", file_path);
 
-        // --- Add Header if requested ---
         if add_headers {
-            let display_path = repo_root
-                .and_then(|root| file_path.strip_prefix(root).ok())
-                .unwrap_or(file_path);
+            // Decide which path to strip based on whether repo_root is Some
+            let display_path_result = match repo_root {
+                // Git mode: try stripping repo root
+                Some(root) => file_path.strip_prefix(root),
+                // Non-Git mode OR --no-git: try stripping target path
+                None => file_path.strip_prefix(target_path),
+            };
+
+            // Use the relativized path if successful, otherwise fall back to the absolute path
+            let display_path = display_path_result.unwrap_or(file_path);
 
             combined_content.push_str(&format!("--- FILE: {} ---\n", display_path.display()));
         }
 
-        // --- Read File Content ---
         buffer.clear();
         match fs::File::open(file_path) {
-            // fs is used here
             Ok(file) => {
-                let mut reader = BufReader::new(file); // BufReader used here
+                let mut reader = BufReader::new(file);
                 match reader.read_to_end(&mut buffer) {
-                    // Read used here
-                    Ok(_) => match String::from_utf8(buffer.clone()) {
-                        Ok(content) => {
-                            combined_content.push_str(&content);
-                            if !content.ends_with('\n') {
+                    Ok(_) => {
+                        match String::from_utf8(buffer.clone()) {
+                            Ok(content) => {
+                                combined_content.push_str(&content);
+                                if !content.ends_with('\n') {
+                                    combined_content.push('\n');
+                                }
                                 combined_content.push('\n');
                             }
-                            combined_content.push('\n');
+                            Err(_) => {
+                                // File is not valid UTF-8 (likely binary)
+                                warn!("Skipping non-UTF8 file: {:?}", file_path);
+                            }
                         }
-                        Err(_) => {
-                            warn!("Skipping non-UTF8 file: {:?}", file_path);
-                        }
-                    },
+                    }
                     Err(e) => {
+                        // Error reading file content
                         warn!("Skipping file due to read error: {:?} - {}", file_path, e);
                     }
                 }
             }
             Err(e) => {
+                // Error opening file (e.g., permissions changed since listing)
                 warn!("Skipping file due to open error: {:?} - {}", file_path, e);
             }
         }
     }
 
-    Ok(combined_content) // Ensure function returns the Result
+    Ok(combined_content)
 }
 
 /// Utility function to run an external command and capture its output.
 fn run_command(cmd: &str, args: &[&str], current_dir: &Path) -> GrabResult<Output> {
-    // <-- Restore body
     debug!(
         "Running command: {} {:?} in directory: {:?}",
         cmd, args, current_dir
     );
-    let output = Command::new(cmd) // Command used here
+    let output = Command::new(cmd)
         .args(args)
         .current_dir(current_dir)
         .output()
@@ -581,8 +585,7 @@ fn run_command(cmd: &str, args: &[&str], current_dir: &Path) -> GrabResult<Outpu
             }
         })?;
 
-    // Return the captured output (caller checks status code)
-    Ok(output) // Ensure function returns the Result
+    Ok(output)
 }
 
 // --- Tests ---
@@ -647,15 +650,21 @@ mod tests {
         // Create an explicitly ignored file
         fs::write(path.join("ignored.log"), "This should be ignored by git.")?; // Matches *.log
 
+        // Create nested structure for header test
+        fs::create_dir_all(path.join("deep/sub"))?;
+        fs::write(path.join("deep/sub/nested.txt"), "Nested content")?;
+        run_command_test("git", &["add", "deep/sub/nested.txt"], path)?; // Track the nested file
+        run_command_test("git", &["commit", "-m", "Add nested file"], path)?;
+
         Ok(true) // Indicate git setup success
     }
 
     // Helper to run commands specifically for tests, panicking on failure
     fn run_command_test(cmd: &str, args: &[&str], current_dir: &Path) -> Result<Output> {
-        println!(
-            "Running test command: {} {:?} in {:?}",
-            cmd, args, current_dir
-        );
+        // println!( // Keep commented out unless debugging test commands
+        //     "Running test command: {} {:?} in {:?}",
+        //     cmd, args, current_dir
+        // );
         let output = Command::new(cmd)
             .args(args)
             .current_dir(current_dir)
@@ -687,7 +696,8 @@ mod tests {
         assert_eq!(actual_set, expected);
     }
 
-    // --- Existing Tests (Unchanged Logic, Added explicit include_default_output: false) ---
+    // --- Existing Tests (Adapted with no_git: false) ---
+
     #[test]
     fn test_detect_git_repo_inside() -> Result<()> {
         let (_dir, path) = setup_test_dir()?;
@@ -729,13 +739,13 @@ mod tests {
             target_path: path.clone(),
             add_headers: false,
             exclude_patterns: vec![],
-            include_untracked: false,      // No effect in walkdir mode
-            include_default_output: false, // Explicitly testing default behavior
+            include_untracked: false,
+            include_default_output: false,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_walkdir(&path, &config)?;
 
-        // Should exclude dirgrab.txt by default
         let expected_set = get_expected_set(
             &path,
             &[
@@ -758,12 +768,12 @@ mod tests {
             add_headers: false,
             exclude_patterns: vec!["*.log".to_string(), "subdir/".to_string()],
             include_untracked: false,
-            include_default_output: false, // Explicitly testing default behavior
+            include_default_output: false,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_walkdir(&path, &config)?;
 
-        // Should exclude dirgrab.txt (default), *.log, and subdir/*
         let expected_set = get_expected_set(&path, &["file1.txt", "file2.rs", "binary.dat"]);
         assert_paths_eq(files, expected_set);
         Ok(())
@@ -774,24 +784,30 @@ mod tests {
         let (_dir, path) = setup_test_dir()?;
         if !setup_git_repo(&path)? {
             return Ok(());
-        } // Skip if git not available
+        }
 
         let config = GrabConfig {
             target_path: path.clone(),
             add_headers: false,
             exclude_patterns: vec![],
-            include_untracked: false,      // Tracked only
-            include_default_output: false, // Explicitly testing default behavior
+            include_untracked: false,
+            include_default_output: false,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_git(&path, &config)?;
 
-        // Expected: Only files explicitly added and committed (.gitignore, file2.rs, subdir/another.txt)
-        // dirgrab.txt is untracked and also excluded by default.
-        let expected_set =
-            get_expected_set(&path, &[".gitignore", "file2.rs", "subdir/another.txt"]);
+        let expected_set = get_expected_set(
+            &path,
+            &[
+                ".gitignore",
+                "file2.rs",
+                "subdir/another.txt",
+                "deep/sub/nested.txt",
+            ],
+        );
 
-        println!("Git tracked files found: {:?}", files);
+        //println!("Git tracked files found: {:?}", files); // Keep commented out unless debugging
         assert_paths_eq(files, expected_set);
         Ok(())
     }
@@ -801,32 +817,31 @@ mod tests {
         let (_dir, path) = setup_test_dir()?;
         if !setup_git_repo(&path)? {
             return Ok(());
-        } // Skip if git not available
+        }
 
         let config = GrabConfig {
             target_path: path.clone(),
             add_headers: false,
             exclude_patterns: vec![],
-            include_untracked: true,       // Include untracked
-            include_default_output: false, // Explicitly testing default behavior
+            include_untracked: true,
+            include_default_output: false,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_git(&path, &config)?;
 
-        // Expected: tracked files + untracked.txt
-        // .gitignore'd files (file1.txt, binary.dat, *.log) should NOT be included.
-        // dirgrab.txt is untracked but should be excluded by the default rule.
         let expected_set = get_expected_set(
             &path,
             &[
                 ".gitignore",
                 "file2.rs",
                 "subdir/another.txt",
-                "untracked.txt", // The untracked file (not dirgrab.txt)
+                "deep/sub/nested.txt",
+                "untracked.txt",
             ],
         );
 
-        println!("Git tracked+untracked files found: {:?}", files);
+        //println!("Git tracked+untracked files found: {:?}", files); // Keep commented out unless debugging
         assert_paths_eq(files, expected_set);
         Ok(())
     }
@@ -836,24 +851,26 @@ mod tests {
         let (_dir, path) = setup_test_dir()?;
         if !setup_git_repo(&path)? {
             return Ok(());
-        } // Skip if git not available
+        }
 
         let config = GrabConfig {
             target_path: path.clone(),
             add_headers: false,
-            // Exclude Rust files and everything in subdir/
-            exclude_patterns: vec!["*.rs".to_string(), "subdir/".to_string()],
-            include_untracked: false,      // Tracked only
-            include_default_output: false, // Explicitly testing default behavior
+            exclude_patterns: vec![
+                "*.rs".to_string(),
+                "subdir/".to_string(),
+                "deep/".to_string(),
+            ], // Exclude nested too
+            include_untracked: false,
+            include_default_output: false,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_git(&path, &config)?;
 
-        // Expected: .gitignore (file2.rs and subdir/another.txt are excluded by -e)
-        // dirgrab.txt excluded by default.
         let expected_set = get_expected_set(&path, &[".gitignore"]);
 
-        println!("Git tracked files (with exclude) found: {:?}", files);
+        //println!("Git tracked files (with exclude) found: {:?}", files); // Keep commented out unless debugging
         assert_paths_eq(files, expected_set);
         Ok(())
     }
@@ -863,34 +880,30 @@ mod tests {
         let (_dir, path) = setup_test_dir()?;
         if !setup_git_repo(&path)? {
             return Ok(());
-        } // Skip if git not available
+        }
 
         let config = GrabConfig {
             target_path: path.clone(),
             add_headers: false,
-            // Exclude .txt files
-            exclude_patterns: vec!["*.txt".to_string()], // This excludes untracked.txt and subdir/another.txt
-            include_untracked: true,                     // Include untracked
-            include_default_output: false,               // Explicitly testing default behavior
+            exclude_patterns: vec!["*.txt".to_string()], // Excludes untracked.txt, another.txt, nested.txt
+            include_untracked: true,
+            include_default_output: false,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_git(&path, &config)?;
 
-        // Expected: .gitignore, file2.rs
-        // Excluded by -e: subdir/another.txt, untracked.txt
-        // Excluded by .gitignore: file1.txt, binary.dat, *.log (ignored.log, subdir/file3.log)
-        // Excluded by default: dirgrab.txt
         let expected_set = get_expected_set(&path, &[".gitignore", "file2.rs"]);
 
-        println!(
-            "Git tracked+untracked (with exclude) files found: {:?}",
-            files
-        );
+        // println!( // Keep commented out unless debugging
+        //     "Git tracked+untracked (with exclude) files found: {:?}",
+        //     files
+        // );
         assert_paths_eq(files, expected_set);
         Ok(())
     }
 
-    // --- Tests for Item (B) - Specific Override ---
+    // --- Tests for Item (B) - Specific Override (Adapted with no_git: false) ---
 
     #[test]
     fn test_list_files_walkdir_include_default_output() -> Result<()> {
@@ -900,12 +913,12 @@ mod tests {
             add_headers: false,
             exclude_patterns: vec![],
             include_untracked: false,
-            include_default_output: true, // Override the default exclusion
+            include_default_output: true,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_walkdir(&path, &config)?;
 
-        // Should NOW include dirgrab.txt
         let expected_set = get_expected_set(
             &path,
             &[
@@ -914,7 +927,8 @@ mod tests {
                 "subdir/file3.log",
                 "subdir/another.txt",
                 "binary.dat",
-                "dirgrab.txt", // <--- Now included
+                "dirgrab.txt",
+                // Note: deep/sub/nested.txt is not created in non-git setup
             ],
         );
         assert_paths_eq(files, expected_set);
@@ -928,30 +942,29 @@ mod tests {
             return Ok(());
         }
 
-        // --- Important: Add and commit dirgrab.txt for this test ---
         fs::write(path.join("dirgrab.txt"), "Tracked dirgrab output.")?;
         run_command_test("git", &["add", "dirgrab.txt"], &path)?;
         run_command_test("git", &["commit", "-m", "Add dirgrab.txt"], &path)?;
-        // ---
 
         let config = GrabConfig {
             target_path: path.clone(),
             add_headers: false,
             exclude_patterns: vec![],
-            include_untracked: false,     // Tracked only
-            include_default_output: true, // Override default exclusion
+            include_untracked: false,
+            include_default_output: true,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_git(&path, &config)?;
 
-        // Expected: Tracked files including the now tracked dirgrab.txt
         let expected_set = get_expected_set(
             &path,
             &[
                 ".gitignore",
                 "file2.rs",
                 "subdir/another.txt",
-                "dirgrab.txt", // <--- Now included (because it's tracked and override is on)
+                "deep/sub/nested.txt",
+                "dirgrab.txt",
             ],
         );
         assert_paths_eq(files, expected_set);
@@ -964,28 +977,28 @@ mod tests {
         if !setup_git_repo(&path)? {
             return Ok(());
         }
-
-        // dirgrab.txt remains untracked in this scenario (created by setup_test_dir initially)
+        // dirgrab.txt is untracked here (created by setup_test_dir)
 
         let config = GrabConfig {
             target_path: path.clone(),
             add_headers: false,
             exclude_patterns: vec![],
-            include_untracked: true,      // Include untracked
-            include_default_output: true, // Override default exclusion
+            include_untracked: true,
+            include_default_output: true,
+            no_git: false, // Explicitly default behavior
         };
 
         let files = list_files_git(&path, &config)?;
 
-        // Expected: Tracked files + untracked.txt + dirgrab.txt (since override is on)
         let expected_set = get_expected_set(
             &path,
             &[
                 ".gitignore",
                 "file2.rs",
                 "subdir/another.txt",
+                "deep/sub/nested.txt",
                 "untracked.txt",
-                "dirgrab.txt", // <--- Now included (because it's untracked but override is on)
+                "dirgrab.txt",
             ],
         );
         assert_paths_eq(files, expected_set);
@@ -998,25 +1011,25 @@ mod tests {
         if !setup_git_repo(&path)? {
             return Ok(());
         }
-        // dirgrab.txt is untracked
 
         let config = GrabConfig {
             target_path: path.clone(),
             add_headers: false,
-            exclude_patterns: vec!["dirgrab.txt".to_string()], // User explicitly excludes it
+            exclude_patterns: vec!["dirgrab.txt".to_string()],
             include_untracked: true,
-            include_default_output: true, // Override doesn't matter if user excludes it
+            include_default_output: true, // Override doesn't matter
+            no_git: false,                // Explicitly default behavior
         };
 
         let files = list_files_git(&path, &config)?;
 
-        // Expected: Tracked files + untracked.txt. dirgrab.txt is excluded by user pattern.
         let expected_set = get_expected_set(
             &path,
             &[
                 ".gitignore",
                 "file2.rs",
                 "subdir/another.txt",
+                "deep/sub/nested.txt",
                 "untracked.txt",
             ],
         );
@@ -1024,44 +1037,317 @@ mod tests {
         Ok(())
     }
 
-    // --- Tests for process_files (Unchanged) ---
+    // --- Tests for Item (C) - Specific --no-git Behavior ---
 
     #[test]
-    fn test_process_files_no_headers_skip_binary() -> Result<()> {
+    fn test_no_git_flag_forces_walkdir_in_git_repo() -> Result<()> {
         let (_dir, path) = setup_test_dir()?;
-        // Note: dirgrab.txt exists but should have been filtered out before this step in real use
-        let files_to_process = vec![
-            path.join("file1.txt"),
-            path.join("binary.dat"),
-            path.join("file2.rs"),
-        ];
+        if !setup_git_repo(&path)? {
+            return Ok(());
+        }
 
-        let result = process_files(&files_to_process, false, None)?;
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: false,
+            exclude_patterns: vec![],
+            include_untracked: false,      // Should have no effect
+            include_default_output: false, // Exclude dirgrab.txt
+            no_git: true,                  // Force walkdir
+        };
 
-        let expected_content = "Content of file 1.\n\nfn main() {}\n\n";
+        // Use grab_contents to test the top-level logic switch
+        let result_string = grab_contents(&config)?;
 
-        assert_eq!(result.trim(), expected_content.trim());
+        // Check content presence/absence based on walkdir behavior
+        assert!(
+            result_string.contains("Content of file 1."),
+            "Should include file1.txt (ignored by .gitignore but --no-git)"
+        );
+        assert!(
+            result_string.contains("*.log"),
+            "Should include .gitignore itself"
+        );
+        assert!(
+            result_string.contains("fn main() {}"),
+            "Should include file2.rs"
+        );
+        assert!(
+            result_string.contains("Log message."),
+            "Should include file3.log (ignored by .gitignore)"
+        );
+        assert!(
+            result_string.contains("Another text file."),
+            "Should include another.txt"
+        );
+        assert!(
+            result_string.contains("Nested content"),
+            "Should include nested.txt"
+        );
+        assert!(
+            result_string.contains("This file is not tracked."),
+            "Should include untracked.txt"
+        );
+        assert!(
+            result_string.contains("This should be ignored by git."),
+            "Should include ignored.log"
+        );
+        assert!(
+            !result_string.contains("Previous dirgrab output."),
+            "Should exclude dirgrab.txt by default"
+        );
 
         Ok(())
     }
 
     #[test]
-    fn test_process_files_with_headers() -> Result<()> {
+    fn test_no_git_flag_still_respects_exclude_patterns() -> Result<()> {
         let (_dir, path) = setup_test_dir()?;
-        // Note: dirgrab.txt exists but should have been filtered out before this step in real use
+        if !setup_git_repo(&path)? {
+            return Ok(());
+        }
+
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: false,
+            exclude_patterns: vec!["*.txt".to_string(), "*.rs".to_string()], // Exclude txt and rs
+            include_untracked: false,
+            include_default_output: false,
+            no_git: true, // Force walkdir
+        };
+
+        let result_string = grab_contents(&config)?;
+
+        assert!(result_string.contains("*.log"), "Should include .gitignore");
+        assert!(
+            result_string.contains("Log message."),
+            "Should include file3.log"
+        );
+        assert!(
+            result_string.contains("This should be ignored by git."),
+            "Should include ignored.log"
+        );
+
+        assert!(
+            !result_string.contains("Content of file 1."),
+            "Should exclude file1.txt by -e"
+        );
+        assert!(
+            !result_string.contains("fn main() {}"),
+            "Should exclude file2.rs by -e"
+        );
+        assert!(
+            !result_string.contains("Another text file."),
+            "Should exclude another.txt by -e"
+        );
+        assert!(
+            !result_string.contains("Nested content"),
+            "Should exclude nested.txt by -e"
+        );
+        assert!(
+            !result_string.contains("This file is not tracked."),
+            "Should exclude untracked.txt by -e"
+        );
+        assert!(
+            !result_string.contains("Previous dirgrab output."),
+            "Should exclude dirgrab.txt by default"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_git_flag_with_include_default_output() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        if !setup_git_repo(&path)? {
+            return Ok(());
+        }
+
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: false,
+            exclude_patterns: vec![],
+            include_untracked: false,
+            include_default_output: true, // Include dirgrab.txt
+            no_git: true,                 // Force walkdir
+        };
+
+        let result_string = grab_contents(&config)?;
+
+        assert!(result_string.contains("Content of file 1."));
+        assert!(result_string.contains("*.log"));
+        assert!(result_string.contains("fn main() {}"));
+        assert!(result_string.contains("Log message."));
+        assert!(result_string.contains("Another text file."));
+        assert!(result_string.contains("Nested content"));
+        assert!(result_string.contains("This file is not tracked."));
+        assert!(result_string.contains("This should be ignored by git."));
+        assert!(
+            result_string.contains("Previous dirgrab output."),
+            "Should include dirgrab.txt due to override"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_git_flag_headers_relative_to_target() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        if !setup_git_repo(&path)? {
+            return Ok(());
+        }
+
+        // nested.txt is created and tracked by setup_git_repo
+
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: true, // Enable headers
+            exclude_patterns: vec![],
+            include_untracked: false,
+            include_default_output: false,
+            no_git: true, // Force walkdir
+        };
+
+        let result_string = grab_contents(&config)?;
+
+        // When --no-git is used, repo_root is None, so paths should be relative to target_path
+        // Use Path::new for cross-platform path separator consistency in expected header
+        let expected_nested_header = format!(
+            "--- FILE: {} ---",
+            Path::new("deep/sub/nested.txt").display()
+        );
+        assert!(
+            result_string.contains(&expected_nested_header),
+            "Header path should be relative to target_path. Expected '{}' in output:\n{}",
+            expected_nested_header,
+            result_string
+        );
+
+        let expected_root_header = format!("--- FILE: {} ---", Path::new(".gitignore").display());
+        assert!(
+            result_string.contains(&expected_root_header),
+            "Root file header check. Expected '{}' in output:\n{}",
+            expected_root_header,
+            result_string
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_git_mode_headers_relative_to_repo_root() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        if !setup_git_repo(&path)? {
+            return Ok(());
+        }
+
+        // Use a target path *inside* the repo
+        let subdir_target = path.join("deep");
+
+        let config = GrabConfig {
+            target_path: subdir_target.clone(), // Start search from subdir
+            add_headers: true,                  // Enable headers
+            exclude_patterns: vec![],
+            include_untracked: false, // Tracked only
+            include_default_output: false,
+            no_git: false, // Use Git mode
+        };
+
+        let result_string = grab_contents(&config)?;
+
+        // Even though target_path is subdir, headers should be relative to repo root (path)
+        let expected_nested_header = format!(
+            "--- FILE: {} ---",
+            Path::new("deep/sub/nested.txt").display()
+        );
+        assert!(
+            result_string.contains(&expected_nested_header),
+            "Header path should be relative to repo root. Expected '{}' in output:\n{}",
+            expected_nested_header,
+            result_string
+        );
+
+        // Check that files outside the subdir_target but inside repo root are also included and relative
+        let expected_root_header = format!("--- FILE: {} ---", Path::new(".gitignore").display());
+        assert!(
+            result_string.contains(&expected_root_header),
+            "Root file header check. Expected '{}' in output:\n{}",
+            expected_root_header,
+            result_string
+        );
+        let expected_rs_header = format!("--- FILE: {} ---", Path::new("file2.rs").display());
+        assert!(
+            result_string.contains(&expected_rs_header),
+            "Root rs file header check. Expected '{}' in output:\n{}",
+            expected_rs_header,
+            result_string
+        );
+
+        Ok(())
+    }
+
+    // --- Tests for process_files (Adapted with target_path) ---
+
+    #[test]
+    fn test_process_files_no_headers_skip_binary() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        let files_to_process = vec![
+            path.join("file1.txt"),
+            path.join("binary.dat"),
+            path.join("file2.rs"),
+        ];
+        let dummy_target_path = path.clone();
+        let result = process_files(&files_to_process, false, None, &dummy_target_path)?;
+
+        let expected_content = "Content of file 1.\n\nfn main() {}\n\n";
+        assert_eq!(result.trim(), expected_content.trim());
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_files_with_headers_git_mode() -> Result<()> {
+        // Test when repo_root is Some (Git mode)
+        let (_dir, path) = setup_test_dir()?;
         let files_to_process = vec![path.join("file1.txt"), path.join("file2.rs")];
-
         let repo_root = Some(path.as_path());
-
-        let result = process_files(&files_to_process, true, repo_root)?;
+        let dummy_target_path = path.clone(); // Target path still needed but repo_root takes precedence for headers
+        let result = process_files(&files_to_process, true, repo_root, &dummy_target_path)?;
 
         let expected_content = format!(
             "--- FILE: {} ---\nContent of file 1.\n\n--- FILE: {} ---\nfn main() {{}}\n\n",
-            Path::new("file1.txt").display(), // Use Path::new for consistent display across OS
-            Path::new("file2.rs").display()
+            Path::new("file1.txt").display(), // Relative to repo_root
+            Path::new("file2.rs").display()   // Relative to repo_root
         );
-
         assert_eq!(result.trim(), expected_content.trim());
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_files_headers_no_git_mode() -> Result<()> {
+        // Test when repo_root is None (Non-Git or --no-git mode)
+        let (_dir, path) = setup_test_dir()?;
+        let files_to_process = vec![path.join("file1.txt"), path.join("subdir/another.txt")];
+        let target_path_ref = path.as_path();
+
+        let result = process_files(&files_to_process, true, None, target_path_ref)?;
+
+        let expected_header1 = format!("--- FILE: {} ---", Path::new("file1.txt").display()); // Relative to target_path
+        let expected_header2 = format!(
+            "--- FILE: {} ---",
+            Path::new("subdir/another.txt").display()
+        ); // Relative to target_path
+
+        assert!(
+            result.contains(&expected_header1),
+            "Header for root file incorrect. Found:\n{}",
+            result
+        );
+        assert!(
+            result.contains(&expected_header2),
+            "Header for subdir file incorrect. Found:\n{}",
+            result
+        );
+        assert!(result.contains("Content of file 1."));
+        assert!(result.contains("Another text file."));
 
         Ok(())
     }
