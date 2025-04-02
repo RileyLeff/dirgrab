@@ -6,17 +6,18 @@ use std::path::{Path, PathBuf};
 
 use log::{debug, warn};
 
-// Use crate:: errors because errors.rs is a sibling module declared in lib.rs
-use crate::errors::GrabResult; // Only need the Result type alias here
+// Use crate:: paths for sibling modules
+use crate::config::GrabConfig; // Import GrabConfig
+use crate::errors::GrabResult;
 
 /// Reads a list of files, concatenates their UTF-8 content, optionally adding headers.
+/// Handles PDF text extraction if configured.
 /// Skips non-UTF8 files and files with read errors, logging warnings.
-/// Crate-public as it's only called by grab_contents in lib.rs.
 pub(crate) fn process_files(
     files: &[PathBuf],
-    add_headers: bool,
+    config: &GrabConfig,
     repo_root: Option<&Path>,
-    target_path: &Path, // Needed for non-git relative paths in headers
+    target_path: &Path,
 ) -> GrabResult<String> {
     debug!("Processing {} files for content.", files.len());
     let mut combined_content = String::with_capacity(files.len() * 1024);
@@ -25,60 +26,101 @@ pub(crate) fn process_files(
     for file_path in files {
         debug!("Processing file content for: {:?}", file_path);
 
-        if add_headers {
-            // Decide which path to strip based on whether repo_root is Some
-            let display_path_result = match repo_root {
-                // Git mode: try stripping repo root
-                Some(root) => file_path.strip_prefix(root),
-                // Non-Git mode OR --no-git: try stripping target path
-                None => file_path.strip_prefix(target_path),
-            };
+        let display_path_result = if !config.no_git {
+            // Simplified condition - repo_root being Some is implied by if let
+            if let Some(repo_root_ref) = repo_root {
+                // Renamed to repo_root_ref for clarity
+                file_path.strip_prefix(repo_root_ref) // Use repo_root_ref here
+            } else {
+                file_path.strip_prefix(target_path) // Fallback if repo_root is None (though unlikely in Git mode)
+            }
+        } else {
+            file_path.strip_prefix(target_path) // Non-Git mode always strips from target_path
+        };
+        let display_path = display_path_result.unwrap_or(file_path);
 
-            // Use the relativized path if successful, otherwise fall back to the absolute path
-            let display_path = display_path_result.unwrap_or(file_path);
+        // --- Start PDF Handling ---
+        let is_pdf = file_path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"));
 
-            combined_content.push_str(&format!("--- FILE: {} ---\n", display_path.display()));
+        if config.convert_pdf && is_pdf {
+            debug!("Attempting PDF text extraction for: {:?}", file_path);
+            match pdf_extract::extract_text(file_path) {
+                Ok(text) => {
+                    if config.add_headers {
+                        combined_content.push_str(&format!(
+                            "--- FILE: {} (extracted text) ---\n",
+                            display_path.display()
+                        ));
+                    }
+                    combined_content.push_str(&text);
+                    if !text.ends_with('\n') {
+                        combined_content.push('\n');
+                    }
+                    combined_content.push('\n');
+                    continue;
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to extract text from PDF {:?}, skipping content: {}",
+                        file_path, e
+                    );
+                    if config.add_headers {
+                        combined_content.push_str(&format!(
+                            "--- FILE: {} (PDF extraction failed) ---\n\n",
+                            display_path.display()
+                        ));
+                    }
+                    continue;
+                }
+            }
         }
+        // --- End PDF Handling ---
 
-        // --- Read File Content ---
-        buffer.clear(); // Reuse the buffer
+        // --- Regular File Handling (only if not handled as PDF) ---
+
+        // --- Read File Content (Header addition moved below) ---
+        buffer.clear();
         match fs::File::open(file_path) {
             Ok(file) => {
                 let mut reader = BufReader::new(file);
                 match reader.read_to_end(&mut buffer) {
                     Ok(_) => {
-                        // Attempt to decode as UTF-8
                         match String::from_utf8(buffer.clone()) {
-                            // Clone needed as buffer is reused
                             Ok(content) => {
+                                // *** Add header ONLY on successful UTF-8 decode ***
+                                if config.add_headers {
+                                    combined_content.push_str(&format!(
+                                        "--- FILE: {} ---\n", // Regular header
+                                        display_path.display()
+                                    ));
+                                }
                                 combined_content.push_str(&content);
-                                // Ensure separation with a newline, even if file doesn't end with one
                                 if !content.ends_with('\n') {
                                     combined_content.push('\n');
                                 }
-                                // Add an extra newline between files for readability
-                                combined_content.push('\n');
+                                combined_content.push('\n'); // Extra newline
                             }
                             Err(_) => {
-                                // File is not valid UTF-8 (likely binary)
                                 warn!("Skipping non-UTF8 file: {:?}", file_path);
+                                // No header is added if UTF-8 decoding fails
                             }
                         }
                     }
                     Err(e) => {
-                        // Error reading file content
                         warn!("Skipping file due to read error: {:?} - {}", file_path, e);
+                        // No header is added if read fails
                     }
                 }
             }
             Err(e) => {
-                // Error opening file (e.g., permissions changed since listing)
                 warn!("Skipping file due to open error: {:?} - {}", file_path, e);
+                // No header is added if open fails
             }
         }
-    }
+        // --- End Regular File Handling ---
+    } // End of loop through files
 
     Ok(combined_content)
 }
-
-// No specific tests for this module if covered by integration tests in lib.rs

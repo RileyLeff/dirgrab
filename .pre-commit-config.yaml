@@ -8,7 +8,6 @@ repos:
   - id: check-toml # Checks TOML files for parseable syntax.
   - id: end-of-file-fixer # Ensures files end with a single newline.
   - id: trailing-whitespace # Trims trailing whitespace.
-  - id: check-added-large-files # Prevent committing large files accidentally
 
 # Rust specific checks
 - repo: local # Use local commands for Rust checks

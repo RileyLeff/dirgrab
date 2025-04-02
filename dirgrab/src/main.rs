@@ -14,7 +14,8 @@ use std::path::PathBuf;
     author,
     version,
     about = "Concatenates files from a directory, respecting Git context. Includes file headers and directory tree by default.",
-    long_about = "Dirgrab walks a directory, finds relevant files (using git ls-files if in a Git repo, otherwise walking the directory), applies exclusions, and concatenates their content to stdout, a file, or the clipboard.\n\nBy default, a directory structure overview is prepended. Use --no-tree to disable this.\nBy default, the content of each file is preceded by a '--- FILE: <filename> ---' header. Use --no-headers to disable this.\nBy default, 'dirgrab.txt' is excluded. Use --include-default-output to override this specific exclusion.\nUse --no-git to ignore Git context entirely and treat the target as a plain directory.\n\nUse -s or --stats to print output size and word count to stderr upon completion."
+    // Updated long_about to mention --convert-pdf
+    long_about = "Dirgrab walks a directory, finds relevant files (using git ls-files if in a Git repo, otherwise walking the directory), applies exclusions, and concatenates their content to stdout, a file, or the clipboard.\n\nBy default, a directory structure overview is prepended. Use --no-tree to disable this.\nBy default, the content of each file is preceded by a '--- FILE: <filename> ---' header. Use --no-headers to disable this.\nBy default, 'dirgrab.txt' is excluded. Use --include-default-output to override this specific exclusion.\nUse --no-git to ignore Git context entirely and treat the target as a plain directory.\nUse --convert-pdf to attempt text extraction from PDF files.\n\nUse -s or --stats to print output size and word count to stderr upon completion."
 )]
 struct Cli {
     /// Optional path to the repository or directory to process.
@@ -69,6 +70,10 @@ struct Cli {
     #[arg(short = 's', long, action = clap::ArgAction::SetTrue)]
     print_stats: bool,
 
+    /// Optionally extract text content from PDF files using pdf-extract.
+    #[arg(long, action = clap::ArgAction::SetTrue)] // Flag added here
+    convert_pdf: bool,
+
     /// Enable verbose output. Use -v for info, -vv for debug, -vvv for trace.
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -121,7 +126,7 @@ fn main() -> Result<()> {
         include_default_output: cli.include_default_output,
         no_git: cli.no_git,
         include_tree,
-        // convert_pdf: cli.convert_pdf, // Placeholder for Phase 2
+        convert_pdf: cli.convert_pdf, // Field added to instantiation
     };
 
     // Call Library

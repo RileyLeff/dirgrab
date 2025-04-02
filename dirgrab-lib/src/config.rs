@@ -47,4 +47,7 @@ pub struct GrabConfig {
     /// If true, prepend an indented directory tree structure to the output,
     /// showing the files and directories included in the grab operation.
     pub include_tree: bool,
+
+    /// If true, attempt to extract text content from PDF files.
+    pub convert_pdf: bool, // <-- Field added here
 }
