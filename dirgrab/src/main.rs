@@ -14,11 +14,10 @@ use std::path::PathBuf;
     author,
     version,
     about = "Concatenates files from a directory, respecting Git context. Includes file headers by default.",
-    long_about = "Dirgrab walks a directory, finds relevant files (using git ls-files if in a Git repo, otherwise walking the directory), applies exclusions, and concatenates their content to stdout, a file, or the clipboard.\n\nBy default, the content of each file is preceded by a '--- FILE: <filename> ---' header. Use --no-headers to disable this.\nBy default, 'dirgrab.txt' is excluded. Use --include-default-output to override this specific exclusion.\nUse --no-git to ignore Git context entirely and treat the target as a plain directory." // Updated long_about
+    long_about = "Dirgrab walks a directory, finds relevant files (using git ls-files if in a Git repo, otherwise walking the directory), applies exclusions, and concatenates their content to stdout, a file, or the clipboard.\n\nBy default, the content of each file is preceded by a '--- FILE: <filename> ---' header. Use --no-headers to disable this.\nBy default, 'dirgrab.txt' is excluded. Use --include-default-output to override this specific exclusion.\nUse --no-git to ignore Git context entirely and treat the target as a plain directory.\nUse --include-tree to prepend a directory structure overview." // Updated long_about
 )]
 struct Cli {
     /// Optional path to the repository or directory to process.
-    /// If not provided, the current working directory is used.
     #[arg(index = 1)]
     target_path: Option<PathBuf>,
 
@@ -35,12 +34,10 @@ struct Cli {
     no_headers: bool,
 
     /// Add patterns to exclude files or directories. Can be used multiple times.
-    /// Uses .gitignore glob syntax. Examples: -e "*.log" -e "target/"
     #[arg(short = 'e', long = "exclude", value_name = "PATTERN")]
     exclude_patterns: Vec<String>,
 
     /// [Git Mode Only] Include untracked files (still respects .gitignore and excludes).
-    /// Has no effect if --no-git is used. // <-- Updated help text
     #[arg(short = 'u', long)]
     include_untracked: bool,
 
@@ -48,12 +45,15 @@ struct Cli {
     #[arg(long)]
     include_default_output: bool,
 
-    // --- Start Modification (C) ---
     /// Ignore Git context and treat the target as a plain directory.
-    /// This disables .gitignore processing and the effect of -u/--include-untracked.
     #[arg(long)]
     no_git: bool,
-    // --- End Modification (C) ---
+
+    // --- Start Modification (D) ---
+    /// Prepend an indented directory structure overview to the output.
+    #[arg(long)]
+    include_tree: bool,
+    // --- End Modification (D) ---
     /// Enable verbose output. Use -v for info, -vv for debug, -vvv for trace.
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -96,9 +96,10 @@ fn main() -> Result<()> {
         exclude_patterns: cli.exclude_patterns,
         include_untracked: cli.include_untracked,
         include_default_output: cli.include_default_output,
-        // --- Start Modification (C) ---
-        no_git: cli.no_git, // Pass the new flag
-                            // --- End Modification (C) ---
+        no_git: cli.no_git,
+        // --- Start Modification (D) ---
+        include_tree: cli.include_tree, // Pass the new flag
+                                        // --- End Modification (D) ---
     };
 
     // Call Library
@@ -110,8 +111,13 @@ fn main() -> Result<()> {
         }
     };
 
+    // Check if content is empty *after* potential tree generation
+    // If the tree was requested and is the *only* thing generated, we still output it.
+    // Only exit early if the final buffer is truly empty (no tree, no files).
     if combined_content.is_empty() {
-        info!("No content was generated (likely no files matched or files were empty/binary).");
+        // This case should now only happen if include_tree was false AND no files were processed.
+        // The library already warned if no files were selected.
+        info!("No content was generated.");
         return Ok(());
     }
 
