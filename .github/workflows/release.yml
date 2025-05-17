@@ -6,6 +6,17 @@ on:
     tags:
       # Matches tags like v1.0.0, v1.0.0-rc1, etc.
       - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'The tag name (e.g., v1.0.0) to create the release from. Leave empty to use the latest commit on the selected branch.'
+        required: false
+        default: ''
+      ref:
+        description: 'The branch or tag ref (e.g., main or refs/tags/v1.0.0) to build from. Required if tag_name is specified.'
+        required: false
+        default: '${{ github.ref }}' # Default to the current branch/tag if triggered by push, or the selected branch manually
+
 
 # Allows for concurrent runs of the same workflow, but only one release process at a time per tag
 # This is important to prevent multiple jobs trying to create the same release.
