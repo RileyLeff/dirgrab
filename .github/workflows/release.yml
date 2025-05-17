@@ -20,7 +20,8 @@ on:
 # Allows for concurrent runs of the same workflow, but only one release process at a time per tag
 # This is important to prevent multiple jobs trying to create the same release.
 concurrency:
-  group: ${{ github.ref }}
+  # Try this format instead
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
