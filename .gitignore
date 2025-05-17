@@ -2,6 +2,8 @@
 # Ignore build artifacts, compiled dependencies, and incremental build info.
 # The leading '/' ensures this only matches the target directory at the project root.
 /target/
+target
+target/*
 
 # Ignore Rust Analyzer specific files (if you use it with VS Code etc.)
 /.rustc_info.json

@@ -1,0 +1,273 @@
+# .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      # Matches tags like v1.0.0, v1.0.0-rc1, etc.
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+# Allows for concurrent runs of the same workflow, but only one release process at a time per tag
+# This is important to prevent multiple jobs trying to create the same release.
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: dirgrab # Your binary crate name
+
+jobs:
+  # This job builds the binary for various platforms
+  build_binaries:
+    name: Build ${{ matrix.os }} / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        target: [x86_64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc]
+        # Filter matrix to build appropriate targets on each OS
+        exclude:
+          # Linux doesn't build Apple or Windows targets natively without significant effort
+          - os: ubuntu-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-msvc
+          # macOS builders can cross-compile for other macOS arches, but not easily Windows/Linux
+          - os: macos-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: x86_64-unknown-linux-gnu
+          # Windows builders don't easily build for Unix targets
+          - os: windows-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: aarch64-apple-darwin
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        target: ${{ matrix.target }} # Install the specific target
+
+    - name: Build release binary
+      # Use --bin to build the specific binary crate in your workspace
+      run: cargo build --release --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}
+
+    - name: Package binary artifact
+      shell: bash # Ensure bash is used for consistent scripting environment
+      run: |
+        TAG_NAME=${{ github.ref_name }}
+        # Determine output file extension and archive command based on OS/Target
+        case ${{ matrix.target }} in
+          *-windows-*)
+            EXT=".exe"
+            ARCHIVE_CMD="zip -j" # -j: junk paths, flat archive
+            ARCHIVE_EXT="zip"
+            ;;
+          *)
+            EXT=""
+            ARCHIVE_CMD="tar -czf"
+            ARCHIVE_EXT="tar.gz"
+            ;;
+        esac
+
+        BINARY_PATH="target/${{ matrix.target }}/release/${{ env.BIN_NAME }}$EXT"
+        ARCHIVE_NAME="${{ env.BIN_NAME }}-$TAG_NAME-${{ matrix.target }}.$ARCHIVE_EXT"
+
+        # Create the archive
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+           # Need to use the zip command available on Windows runner
+           powershell -command "Compress-Archive -Path '${BINARY_PATH}' -DestinationPath '${ARCHIVE_NAME}'"
+        else
+           $ARCHIVE_CMD "$ARCHIVE_NAME" -C $(dirname "$BINARY_PATH") $(basename "$BINARY_PATH")
+        fi
+
+        echo "Generated artifact: $ARCHIVE_NAME"
+        echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV # Store for later upload
+
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v4
+      with:
+        # Name the artifact uniquely per target
+        name: ${{ env.BIN_NAME }}-${{ matrix.target }}
+        path: ${{ env.ARCHIVE_NAME }}
+        retention-days: 5 # Keep artifacts for a short duration
+
+  # This job creates the source archive and calculates its hash
+  create_source_archive:
+    name: Create Source Archive
+    runs-on: ubuntu-latest # Use a consistent runner for archive creation
+    outputs:
+      # Define output so the publish job can get the SHA256 hash
+      sha256_hash: ${{ steps.calculate_hash.outputs.sha256_hash }}
+      archive_name: ${{ steps.create_archive.outputs.archive_name }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Create source archive
+      id: create_archive # Add an ID to reference this step's output
+      shell: bash
+      run: |
+        TAG_NAME=${{ github.ref_name }}
+        ARCHIVE_NAME="${{ env.BIN_NAME }}-$TAG_NAME.tar.gz"
+        # Use git ls-files to get a list of tracked files to include in the archive.
+        # This ensures we don't include temporary build files, etc.
+        # Include top-level project files explicitly if they aren't always tracked (like LICENSE, README)
+        # git ls-files -z outputs null-delimited paths, xargs -0 handles this safely.
+        # -C . ensures paths in the tarball are relative to the project root.
+        # Also explicitly include top-level non-source files usually needed.
+        git ls-files -z | xargs -0 tar --owner=root --group=root -czf "$ARCHIVE_NAME" -C . \
+          README.md LICENSE-APACHE LICENSE-MIT .gitignore .pre-commit-config.yaml Cargo.lock
+
+        echo "Generated source archive: $ARCHIVE_NAME"
+        echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT # Set step output for archive name
+
+    - name: Calculate SHA256 hash
+      id: calculate_hash # Add an ID to reference this step's output
+      shell: bash
+      run: |
+        # Use shasum on macOS/Linux, certutil on Windows? No, this is on ubuntu-latest runner.
+        SHA256_HASH=$(sha256sum ${{ steps.create_archive.outputs.archive_name }} | awk '{ print $1 }')
+        echo "Calculated SHA256: $SHA256_HASH"
+        echo "sha256_hash=$SHA256_HASH" >> $GITHUB_OUTPUT # Set step output for hash
+
+    - name: Upload source artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.BIN_NAME }}-source # Unique name for source artifact
+        path: ${{ steps.create_archive.outputs.archive_name }}
+        retention-days: 5
+
+  # This job creates the GitHub Release and uploads all artifacts as assets
+  publish_release:
+    name: Publish GitHub Release
+    # Use ubuntu-latest as it's common and has necessary tools
+    runs-on: ubuntu-latest
+    # This job depends on all build and source archive jobs completing successfully
+    needs: [build_binaries, create_source_archive]
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        # Download all artifacts into the 'artifacts' directory.
+        # Each artifact will be in its own subdirectory (e.g., artifacts/dirgrab-x86_64-unknown-linux-gnu/dirgrab-vX.Y.Z-...)
+        path: artifacts
+
+    - name: List downloaded artifacts (for debugging)
+      run: ls -R artifacts
+
+    - name: Read Changelog for Release Notes
+      id: read_changelog
+      shell: bash
+      # Attempt to extract the latest release notes from CHANGELOG.md
+      run: |
+        # Check if CHANGELOG.md exists
+        if [ -f CHANGELOG.md ]; then
+          # Use awk to find the section for the current tag.
+          # Assumes version headers are like "## [X.Y.Z]" or "### [X.Y.Z]".
+          # This is a basic approach; more complex changelogs might need a dedicated tool.
+          TAG_NAME=${{ github.ref_name }}
+          # Remove leading 'v' from tag name for comparison
+          VERSION=${TAG_NAME#v}
+          # Find the line with the version header and the line of the next header
+          # Print everything between them.
+          # This is a simplified regex; adjust based on your exact CHANGELOG format.
+          # Example: Find line with ## [VERSION] or ### [VERSION], then print until the next ## or ###
+          CHANGELOG_CONTENT=$(awk '/^##\s*\['"$VERSION"'\]/ {flag=1; next} /^##\s*\[.*\]/ {flag=0} flag' CHANGELOG.md)
+
+          if [ -z "$CHANGELOG_CONTENT" ]; then
+            echo "::warning::Could not find release notes for tag $TAG_NAME in CHANGELOG.md"
+            RELEASE_BODY="No release notes found for tag ${{ github.ref_name }}."
+          else
+            # Escape special characters for use in GitHub Actions output variable
+            RELEASE_BODY=$(echo "$CHANGELOG_CONTENT" | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+          fi
+        else
+          echo "::warning::CHANGELOG.md not found."
+          RELEASE_BODY="CHANGELOG.md not found."
+        fi
+        # Set the output for the release body
+        echo "release_body=$RELEASE_BODY" >> $GITHUB_OUTPUT
+
+
+    - name: Create Release and Upload Assets
+      uses: softprops/action-gh-release@v2
+      with:
+        # Automatically set the tag name from the workflow trigger
+        tag_name: ${{ github.ref_name }}
+        name: Release ${{ github.ref_name }}
+        # Use the changelog content as the release body, or a default message
+        body: |
+          ${{ steps.read_changelog.outputs.release_body }}
+
+          ## Installation (Homebrew)
+
+          To install `dirgrab` via Homebrew, you'll first need to create a Homebrew tap repository (if you haven't already).
+
+          A common naming convention for a tap is `homebrew-<your-tap-name>`. Let's assume you name it `homebrew-dirgrab`.
+          Create a new GitHub repository named `homebrew-dirgrab` under your account (`rileyleff/homebrew-dirgrab`).
+
+          Inside this new tap repository, you'll need to create a Ruby file for the formula.
+          The formula file should be placed in `Formula/dirgrab.rb`.
+
+          You can use the `brew create` command to generate a starting point for your formula locally:
+
+          ```bash
+          brew create --url ${{ github.repository_url }}/releases/download/${{ github.ref_name }}/${{ needs.create_source_archive.outputs.archive_name }} --sha256 ${{ needs.create_source_archive.outputs.sha256_hash }} dirgrab
+          ```
+
+          Edit the generated `dirgrab.rb` file to configure the build and installation steps. For a Rust project building from source:
+
+          ```ruby
+          class Dirgrab < Formula
+            desc "CLI tool to concatenate file contents from directories"
+            homepage "https://github.com/rileyleff/dirgrab" # Your project homepage
+            url "${{ github.repository_url }}/releases/download/${{ github.ref_name }}/${{ needs.create_source_archive.outputs.archive_name }}"
+            sha256 "${{ needs.create_source_archive.outputs.sha256_hash }}"
+            license "MIT OR Apache-2.0" # Ensure this matches your LICENSE files
+            head "https://github.com/rileyleff/dirgrab.git", branch: "main" # Update branch if needed
+
+            depends_on "rust" => :build # Build dependency for Rust projects
+
+            def install
+              # Instructions on how to install after downloading and extracting the source archive
+              # This example uses cargo install --path . to build from the extracted source
+              system "cargo", "install", "--path", ".", "--root", prefix, "--bin", "dirgrab"
+            end
+
+            test do
+              # Test the installed binary
+              # Replace with a simple test for your CLI tool
+              assert_match "dirgrab version", shell_output("#{bin}/dirgrab --version")
+            end
+          end
+          ```
+
+          After creating/updating the `Formula/dirgrab.rb` file in your tap repository, commit and push the changes.
+
+          Users can then install your tool:
+
+          ```bash
+          brew tap rileyleff/dirgrab # Replace with your username and tap name
+          brew install dirgrab
+          ```
+
+          **Binary Assets (Bottles):**
+          The following pre-built binaries are attached to this release:
+
+        draft: false # Set to true if you want to manually publish the release later
+        prerelease: ${{ contains(github.ref_name, '-') }} # Automatically mark as prerelease for tags like v1.0.0-rc1
+        # Upload all files found in the 'artifacts' directory (recursively) as release assets
+        files: artifacts/**/*
+        token: ${{ secrets.GITHUB_TOKEN }} # GITHUB_TOKEN is automatically available
