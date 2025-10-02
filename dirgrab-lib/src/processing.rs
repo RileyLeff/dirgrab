@@ -1,10 +1,9 @@
 // --- FILE: dirgrab-lib/src/processing.rs ---
 
 use std::fs;
-use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use log::{debug, warn};
+use log::{debug, info, warn};
 
 // Use crate:: paths for sibling modules
 use crate::config::GrabConfig; // Import GrabConfig
@@ -21,7 +20,6 @@ pub(crate) fn process_files(
 ) -> GrabResult<String> {
     debug!("Processing {} files for content.", files.len());
     let mut combined_content = String::with_capacity(files.len() * 1024);
-    let mut buffer = Vec::new(); // Reusable buffer for reading
 
     for file_path in files {
         debug!("Processing file content for: {:?}", file_path);
@@ -81,42 +79,25 @@ pub(crate) fn process_files(
         // --- Regular File Handling (only if not handled as PDF) ---
 
         // --- Read File Content (Header addition moved below) ---
-        buffer.clear();
-        match fs::File::open(file_path) {
-            Ok(file) => {
-                let mut reader = BufReader::new(file);
-                match reader.read_to_end(&mut buffer) {
-                    Ok(_) => {
-                        match String::from_utf8(buffer.clone()) {
-                            Ok(content) => {
-                                // *** Add header ONLY on successful UTF-8 decode ***
-                                if config.add_headers {
-                                    combined_content.push_str(&format!(
-                                        "--- FILE: {} ---\n", // Regular header
-                                        display_path.display()
-                                    ));
-                                }
-                                combined_content.push_str(&content);
-                                if !content.ends_with('\n') {
-                                    combined_content.push('\n');
-                                }
-                                combined_content.push('\n'); // Extra newline
-                            }
-                            Err(_) => {
-                                warn!("Skipping non-UTF8 file: {:?}", file_path);
-                                // No header is added if UTF-8 decoding fails
-                            }
-                        }
+        match fs::read(file_path) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(content) => {
+                    if config.add_headers {
+                        combined_content
+                            .push_str(&format!("--- FILE: {} ---\n", display_path.display()));
                     }
-                    Err(e) => {
-                        warn!("Skipping file due to read error: {:?} - {}", file_path, e);
-                        // No header is added if read fails
+                    combined_content.push_str(&content);
+                    if !content.ends_with('\n') {
+                        combined_content.push('\n');
                     }
+                    combined_content.push('\n');
                 }
-            }
+                Err(_) => {
+                    info!("Skipping non-UTF8 file: {:?}", file_path);
+                }
+            },
             Err(e) => {
-                warn!("Skipping file due to open error: {:?} - {}", file_path, e);
-                // No header is added if open fails
+                warn!("Skipping file due to read error: {:?} - {}", file_path, e);
             }
         }
         // --- End Regular File Handling ---

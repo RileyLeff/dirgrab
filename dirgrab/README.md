@@ -1,39 +1,27 @@
 # dirgrab 📁⚡
 
-[![Crates.io](https://img.shields.io/crates/v/dirgrab/0.2.0.svg)](https://crates.io/crates/dirgrab) <!-- Placeholder version -->
-[![Docs.rs](https://docs.rs/dirgrab-lib/0.2.0/badge.svg)](https://docs.rs/dirgrab-lib) <!-- Placeholder version -->
+[![Crates.io](https://img.shields.io/crates/v/dirgrab.svg)](https://crates.io/crates/dirgrab)
+[![Docs.rs](https://docs.rs/dirgrab-lib/badge.svg)](https://docs.rs/dirgrab-lib)
 
-`dirgrab` is a simple command-line tool to grab the contents of files within a directory and concatenate them, suitable for feeding whole-project contexts into language models.
+`dirgrab` walks a directory (or Git repository), selects the files that matter, and concatenates their contents for easy copy/paste into language models. It can write to stdout, a file, or your clipboard, and it ships with a library crate so the same logic can be embedded elsewhere.
 
-It uses Git context when available (`git ls-files`) to only include tracked files (respecting `.gitignore`), but also works seamlessly on plain directories. By default, it includes a directory structure overview and file content headers.
+## Highlights
 
-**Features:**
-
-*   Concatenates file contents to stdout, a file (`-o`), or the clipboard (`-c`).
-*   Uses `git ls-files` in Git repositories (respects `.gitignore` by default).
-*   Optionally includes untracked files in Git repos (`-u`).
-*   Works on non-Git directories by walking the file tree.
-*   Allows custom exclude patterns (`-e`) using `.gitignore` glob syntax.
-*   Excludes `dirgrab.txt` by default (override with `--include-default-output`).
-*   Includes a directory structure overview by default (disable with `--no-tree`).
-*   Includes file headers (`--- FILE: path/to/file ---`) by default (disable with `--no-headers`).
-*   Extracts text content from PDF files (disable with `--no-pdf`).
-*   Optionally prints output size and word count to stderr (`-s`, `--stats`).
-*   Skips binary/non-UTF8 files (other than convertible PDFs) with a warning.
-*   Option to ignore Git context entirely (`--no-git`).
-*   Core logic available as a library (`dirgrab-lib`).
+- 🔧 **Configurable defaults** – merge built-in defaults with global `config.toml`, project-local `.dirgrab.toml`, `.dirgrabignore`, and CLI flags.
+- 🧭 **Git-aware out of the box** – untracked files are included by default, scoped to the selected subdirectory, with `--tracked-only` and `--all-repo` to opt out.
+- 🗂️ **Structured context** – optional directory tree, per-file headers, PDF text extraction, and deterministic file ordering for stable diffs.
+- 🧮 **Better stats** – `-s/--stats` now prints bytes, words, and an approximate token count with configurable ratio and exclusion toggles.
+- 🙅 **Safety nets** – automatically ignores the active output file, respects `.gitignore`, and gracefully skips binary/non-UTF8 files.
 
 ## Installation
 
-Ensure you have Rust and Cargo installed. Then, install `dirgrab` using Cargo:
-
 ```bash
 cargo install dirgrab
-# Or, to install/update from a local checkout:
+# or from a local checkout
 # cargo install --path .
 ```
 
-Verify the installation:
+Check it worked:
 
 ```bash
 dirgrab --version
@@ -45,119 +33,123 @@ dirgrab --version
 dirgrab [OPTIONS] [TARGET_PATH]
 ```
 
-**Arguments:**
+`TARGET_PATH` defaults to the current directory. When invoked inside a Git repo, `dirgrab` scopes the listing to that subtree unless you pass `--all-repo`.
 
-*   `[TARGET_PATH]`: Optional path to the directory or Git repository to process. Defaults to the current working directory.
+### Common Options
 
-**Options:**
+- `-o, --output [FILE]` – write to a file (defaults to `dirgrab.txt` if no name is given). Conflicts with `--clipboard`.
+- `-c, --clipboard` – copy to the system clipboard instead of stdout or a file.
+- `--no-headers` / `--no-tree` / `--no-pdf` – disable headers, the directory tree, or PDF extraction.
+- `-e, --exclude <PATTERN>` – add glob-style excludes (applied after config files).
+- `--tracked-only` – Git mode: limit to tracked files. (Compatibility note: `-u/--include-untracked` still forces inclusion if you need it.)
+- `--all-repo` – Git mode: operate on the entire repository even if the target is a subdirectory.
+- `--include-default-output` – allow `dirgrab.txt` back into the run.
+- `--no-git` – ignore Git context entirely and walk the filesystem.
+- `--no-config` – ignore global/local config files and `.dirgrabignore`.
+- `--config <FILE>` – load an additional TOML config file (applied after global/local unless `--no-config`).
+- `--token-ratio <FLOAT>` – override the characters-to-tokens ratio used by `--stats` (defaults to 3.6).
+- `--tokens-exclude-tree` / `--tokens-exclude-headers` – subtract tree or header sections when estimating tokens.
+- `-s, --stats` – print bytes, words, and approximate tokens to stderr when finished.
+- `-v, -vv, -vvv` – increase log verbosity (Warn, Info, Debug, Trace).
+- `-h, --help` / `-V, --version` – CLI boilerplate.
 
-*   `-o, --output [FILE]`: Write output to a file. Defaults to `dirgrab.txt` in the current directory if `FILE` is omitted. Conflicts with `-c`.
-*   `-c, --clipboard`: Copy output to the system clipboard. Conflicts with `-o`.
-*   `--no-headers`: Disable the default '--- FILE: ... ---' headers.
-*   `--no-tree`: Disable the default inclusion of the directory structure overview.
-*   `-e, --exclude <PATTERN>`: Add glob patterns to exclude files/dirs (can be used multiple times).
-*   `-u, --include-untracked`: [Git Mode Only] Include untracked files (still respects `.gitignore` and excludes). Has no effect if `--no-git` is used.
-*   `--include-default-output`: Include `dirgrab.txt` if it exists (overrides default exclusion).
-*   `--no-git`: Ignore Git context; treat target as a plain directory (disables `.gitignore` processing and the effect of `-u`).
-*   `--no-pdf`: Disable the default extraction of text content from PDF files.
-*   `-s, --stats`: Print output size (bytes) and word count to stderr upon completion.
-*   `-v, -vv, -vvv`: Increase verbosity level for logging (Warn, Info, Debug, Trace).
-*   `-h, --help`: Print help information.
-*   `-V, --version`: Print version information.
+### Configuration Files
 
-**Examples:**
+`dirgrab` layers configuration in the following order (later wins):
 
-1.  **Grab tracked files from current Git repo to stdout (default tree and headers):**
-    ```bash
-    dirgrab
-    ```
+1. Built-in defaults
+2. Global config + ignore
+   - Linux: `~/.config/dirgrab/config.toml` & `~/.config/dirgrab/ignore`
+   - macOS: `~/Library/Application Support/dirgrab/config.toml` & `…/ignore`
+   - Windows: `%APPDATA%\dirgrab\config.toml` & `ignore`
+3. Project-local config: `<target>/.dirgrab.toml`
+4. Project-local ignore patterns: `<target>/.dirgrabignore`
+5. CLI flags (`--tracked-only`, `--no-tree`, etc.)
 
-2.  **Grab files from current directory, disable tree and headers, output to file `context.txt`:**
-    ```bash
-    dirgrab --no-tree --no-headers -o context.txt
-    ```
+Sample `config.toml`:
 
-3.  **Grab tracked files, copy to clipboard, show stats:**
-    ```bash
-    dirgrab -c -s ../my-other-project/
-    ```
+```toml
+[dirgrab]
+exclude = ["Cargo.lock", "*.csv", "node_modules/", "target/"]
+include_tree = true
+add_headers = true
+convert_pdf = true
+tracked_only = false
+all_repo = false
 
-4.  **Grab tracked + untracked files, excluding logs and build dirs, show stats:**
-    ```bash
-    dirgrab -u -e "*.log" -e "target/" -e "build/" -s
-    ```
+[stats]
+enabled = true
+token_ratio = 3.6
+tokens_exclude = ["tree"]
+```
 
-5.  **Grab all files from a non-Git directory, ignoring Git, excluding temp files, output to default `dirgrab.txt`:**
-    ```bash
-    dirgrab --no-git -e "*.tmp" /path/to/non-git-dir -o
-    ```
+`ignore` files use the same syntax as `.gitignore`. CLI `-e` patterns and the active output file name are appended last, so the freshly written file is never re-ingested accidentally.
 
-6.  **Grab files, but force inclusion of `dirgrab.txt` if it exists:**
-    ```bash
-    dirgrab --include-default-output
-    ```
+### Examples
 
-## Behavior Details
+```bash
+# Grab the current repo subtree (includes untracked files) and show stats
+dirgrab -s
 
-*   **Git Mode (Default):** If the target directory is detected as part of a Git repository and `--no-git` is *not* used, `dirgrab` uses `git ls-files` to determine which files to include. This automatically respects `.gitignore` rules. The `-u` flag adds untracked files (still respecting `.gitignore`). User exclusions (`-e`) are applied. `dirgrab.txt` is excluded unless `--include-default-output` is used.
-*   **Non-Git Mode (`--no-git` or not a repo):** `dirgrab` walks the directory tree. It includes all files found unless they match a user exclusion pattern (`-e`) or the default exclusion (`dirgrab.txt`, unless overridden). `.gitignore` files are *ignored*.
-*   **Directory Tree:** By default, an indented directory tree showing the files *selected* for processing (after filtering) is prepended to the output. Use `--no-tree` to disable this.
-*   **File Headers:** By default, each file's content is preceded by `--- FILE: <relative_path> ---`. The path is relative to the Git repo root (in Git mode) or the target path (in non-Git mode). Use `--no-headers` to disable.
-*   **Default Output File:** The file `dirgrab.txt` is excluded by default to prevent accidental inclusion of previous runs. Use `--include-default-output` to override this specific exclusion.
-*   **Output File (`-o`) Default:** If `-o` is provided without a subsequent filename, the output is written to `dirgrab.txt` in the current working directory.
-*   **PDF Conversion:** Enabled by default, attempts to extract text from files ending in `.pdf` (case-insensitive). This relies on the `pdf-extract` crate and works best for text-based PDFs. Image-based PDFs or errors during extraction will result in a warning, and the file's content will be skipped (though a header might be added if enabled). Can be disabled with a feature flag.
-*   **File Encoding:** For non-PDF files, `dirgrab` attempts to read files as UTF-8. If a file cannot be decoded (likely binary), it is skipped, and a warning is printed to stderr (visible with `-v`).
-*   **Output Statistics (`-s`, `--stats`):** If enabled, the total byte count and a simple word count (based on whitespace) of the final generated output (including tree and headers) are printed to stderr after the operation completes successfully.
+# Limit to tracked files only and exclude build artifacts
+dirgrab --tracked-only -e "*.log" -e "target/"
+
+# Force a whole-repo snapshot from within a subdirectory
+dirgrab --all-repo
+
+# Plain directory mode with custom excludes, writing to the default file
+dirgrab --no-git -e "*.tmp" -o
+
+# Use project defaults but ignore configs for a “clean” run
+dirgrab --no-config --no-tree --no-headers
+```
+
+## Behaviour Notes
+
+- **Git scope & ordering** – Paths are gathered via `git ls-files`, scoped to the target subtree unless `--all-repo` is set, and the final list is sorted for deterministic output. Non-Git mode uses `walkdir` with the same ordering.
+- **File headers & tree** – Headers and tree sections remain enabled by default; toggle them per run or through config files.
+- **PDF handling** – Text is extracted from PDFs unless disabled. Failures and binary files are skipped with informative (but less noisy) logs.
+- **Stats** – When `--stats` is active (or enabled in config), stderr shows bytes, words, and an approximate token count. Exclude tree/headers or change the ratio via config or CLI.
+- **Safety** – `dirgrab.txt` stays excluded unless explicitly re-enabled, and any active `-o FILE` target is auto-excluded for that run.
 
 ## Library (`dirgrab-lib`)
 
-The core logic is available as a separate library crate (`dirgrab-lib`) for use in other Rust projects. The library structure has been refactored for better maintainability. See its documentation [on docs.rs](https://docs.rs/dirgrab-lib) (link will work after publishing).
+The same engine powers `dirgrab-lib`; import it to drive custom tooling:
+
+```rust
+use dirgrab_lib::{grab_contents, GrabConfig};
+# // build a GrabConfig and call grab_contents(&config)
+```
+
+See [docs.rs](https://docs.rs/dirgrab-lib) for API details.
 
 ## Changelog
 
+### [0.3.0]
+
+- Added layered configuration (global `config.toml`/`ignore`, project `.dirgrab.toml`/`.dirgrabignore`, CLI precedence).
+- Git mode now scopes to the requested subtree, includes untracked files by default, and exposes `--tracked-only` / `--all-repo` switches.
+- Ensured deterministic file ordering and automatic exclusion of the active output file.
+- Extended `--stats` with configurable token estimates (`--token-ratio`, `--tokens-exclude-*`).
+- Reduced binary-file log noise and streamlined file reading for better performance.
+- Fixed the release workflow to generate source archives via null-delimited tar input.
+
 ### [0.2.0]
 
-**Added**
-
-*   PDF processing with the `pdf-extract` crate.
-*   `-s`, `--stats` flag to optionally print output byte size and word count to stderr.
-*   `--no-git` flag to force directory walking and ignore Git context even in a repository.
-*   `--include-default-output` flag to specifically override the default exclusion of `dirgrab.txt`.
-*   `--no-tree` flag to disable the directory tree overview (which is now enabled by default).
-
-**Changed**
-
-*   **BREAKING:** Directory tree structure is now included in the output **by default**. Use `--no-tree` to disable. (Previously required `--include-tree`).
-*   `-o`/`--output` flag now defaults to writing to `dirgrab.txt` in the current directory if the flag is provided without an explicit filename.
-*   Output statistics (byte/word count) are now **off by default**. Use `-s` or `--stats` to enable. (Previously always printed).
-*   The file `dirgrab.txt` is now **excluded by default** in both Git and non-Git modes. Use `--include-default-output` to include it.
-*   File headers for non-UTF8 files or files skipped due to errors are no longer added, improving clarity when content is omitted. PDF extraction failures may still add a specific "(PDF extraction failed)" header if headers are enabled.
-
-**Internal**
-
-*   Refactored `dirgrab-lib` into modules (`config`, `errors`, `listing`, `processing`, `tree`, `utils`) for better organization.
-*   Added specific tests for PDF handling.
-*   Resolved various Clippy warnings, including unnecessary unwraps.
+- Added PDF extraction, directory tree by default, `--no-git`, `--include-default-output`, `--no-tree`, and optional stats output.
+- Defaulted the output filename for `-o`, skipped non-UTF8 headers, and refactored the library layout.
 
 ### [0.1.0]
 
-*   Initial release with core functionality:
-    *   Directory walking and Git (`ls-files`) integration.
-    *   Output to stdout, file (`-o <file>`), or clipboard (`-c`).
-    *   Basic exclusion patterns (`-e`).
-    *   Optional file headers (`--no-headers`).
-    *   Optional inclusion of untracked files (`-u`).
-    *   Verbose logging (`-v`).
+- Initial release: Git-aware file selection, clipboard and file outputs, excludes, headers, and verbosity controls.
 
 ## License
 
-This project is licensed under either of:
+Licensed under either of:
 
-*   Apache License, Version 2.0, (LICENSE-APACHE or [link](http://www.apache.org/licenses/LICENSE-2.0))
-*   MIT license (LICENSE-MIT or [link](http://opensource.org/licenses/MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
 
-at your option.
+## Contributing
 
-## Contribution
-
-Contributions are welcome! Please feel free to submit issues and pull requests. Discuss significant changes via an issue first. Ensure code adheres to existing style (checked by `cargo fmt`) and passes Clippy (`cargo clippy`) and tests (`cargo test`).
+Issues and PRs are welcome! Please run `cargo fmt`, `cargo clippy`, and `cargo test` before submitting.

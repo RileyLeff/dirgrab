@@ -82,91 +82,45 @@ pub(crate) fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
 
 /// Lists files using `git ls-files`. Handles tracked and optionally untracked files.
 /// Crate-public as it's only called by grab_contents in lib.rs.
-pub(crate) fn list_files_git(repo_root: &Path, config: &GrabConfig) -> GrabResult<Vec<PathBuf>> {
-    debug!("Listing files using Git in root: {:?}", repo_root);
-
-    let base_args = ["ls-files", "-z"];
-    let exclude_pathspecs: Vec<String> = config
-        .exclude_patterns
-        .iter()
-        .map(|p| format!(":!{}", p))
-        .collect();
-
-    let mut all_exclude_refs: Vec<&str> = Vec::new();
-    if !config.include_default_output {
-        let default_exclude_pathspec = ":!dirgrab.txt";
-        all_exclude_refs.push(default_exclude_pathspec);
-        debug!("Applying default exclusion for 'dirgrab.txt'");
-    } else {
-        info!("Default exclusion for 'dirgrab.txt' is disabled by --include-default-output flag.");
-    }
-    all_exclude_refs.extend(exclude_pathspecs.iter().map(|s| s.as_str()));
-
-    let mut combined_files = HashSet::new(); // Uses HashSet
-
-    // Tracked files
-    let mut tracked_args = base_args.to_vec();
-    tracked_args.extend_from_slice(&all_exclude_refs);
-    let tracked_command_str = format!("git {}", tracked_args.join(" "));
+pub(crate) fn list_files_git(
+    repo_root: &Path,
+    config: &GrabConfig,
+    scope_subdir: Option<&Path>,
+) -> GrabResult<Vec<PathBuf>> {
     debug!(
-        "Running git command for tracked files: {}",
-        tracked_command_str
+        "Listing files using Git in root {:?} with scope {:?}",
+        repo_root, scope_subdir
     );
-    let tracked_output = run_command("git", &tracked_args, repo_root)?; // Uses run_command
-    if !tracked_output.status.success() {
-        let stderr = String::from_utf8_lossy(&tracked_output.stderr).into_owned();
-        let stdout = String::from_utf8_lossy(&tracked_output.stdout).into_owned();
-        error!(
-            "git ls-files command (tracked) failed.\nStderr: {}\nStdout: {}",
-            stderr, stdout
-        );
-        return Err(GrabError::GitCommandError {
-            command: tracked_command_str,
-            stderr,
-            stdout,
-        });
-    }
-    String::from_utf8_lossy(&tracked_output.stdout)
-        .split('\0')
-        .filter(|s| !s.is_empty())
-        .for_each(|s| {
-            combined_files.insert(repo_root.join(s));
-        });
 
-    // Untracked files (if requested)
+    let mut combined_files = HashSet::new();
+
+    let scope_specs = build_scope_pathspecs(repo_root, scope_subdir);
+    let exclude_specs = build_exclude_pathspecs(config);
+
+    let mut tracked_args = vec!["ls-files".to_string(), "-z".to_string()];
+    tracked_args.extend(scope_specs.iter().cloned());
+    tracked_args.extend(exclude_specs.iter().cloned());
+
+    run_git_ls(repo_root, &tracked_args, "tracked", &mut combined_files)?;
+
     if config.include_untracked {
-        let mut untracked_args = base_args.to_vec();
-        untracked_args.push("--others");
-        untracked_args.push("--exclude-standard");
-        untracked_args.extend_from_slice(&all_exclude_refs);
-        let untracked_command_str = format!("git {}", untracked_args.join(" "));
-        debug!(
-            "Running git command for untracked files: {}",
-            untracked_command_str
-        );
-        let untracked_output = run_command("git", &untracked_args, repo_root)?; // Uses run_command
-        if !untracked_output.status.success() {
-            let stderr = String::from_utf8_lossy(&untracked_output.stderr).into_owned();
-            let stdout = String::from_utf8_lossy(&untracked_output.stdout).into_owned();
-            error!(
-                "git ls-files command (untracked) failed.\nStderr: {}\nStdout: {}",
-                stderr, stdout
-            );
-            return Err(GrabError::GitCommandError {
-                command: untracked_command_str,
-                stderr,
-                stdout,
-            });
-        }
-        String::from_utf8_lossy(&untracked_output.stdout)
-            .split('\0')
-            .filter(|s| !s.is_empty())
-            .for_each(|s| {
-                combined_files.insert(repo_root.join(s));
-            });
+        let mut untracked_args = vec![
+            "ls-files".to_string(),
+            "-z".to_string(),
+            "--others".to_string(),
+            "--exclude-standard".to_string(),
+        ];
+        untracked_args.extend(scope_specs.iter().cloned());
+        untracked_args.extend(exclude_specs.iter().cloned());
+
+        run_git_ls(repo_root, &untracked_args, "untracked", &mut combined_files)?;
+    } else {
+        debug!("Skipping untracked files per configuration.");
     }
 
-    Ok(combined_files.into_iter().collect())
+    let mut files: Vec<PathBuf> = combined_files.into_iter().collect();
+    files.sort();
+    Ok(files)
 }
 
 /// Lists files using `walkdir` when not in a Git repository. Applies command-line excludes.
@@ -255,5 +209,110 @@ pub(crate) fn list_files_walkdir(
         }
     }
 
+    files.sort();
     Ok(files)
+}
+
+fn run_git_ls(
+    repo_root: &Path,
+    args: &[String],
+    phase: &str,
+    combined_files: &mut HashSet<PathBuf>,
+) -> GrabResult<()> {
+    let display_command = format!("git {}", args.join(" "));
+    debug!(
+        "Running git command for {} files: {}",
+        phase, display_command
+    );
+
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let output = run_command("git", &arg_refs, repo_root)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        error!(
+            "git ls-files command ({}) failed.\nStderr: {}\nStdout: {}",
+            phase, stderr, stdout
+        );
+        return Err(GrabError::GitCommandError {
+            command: display_command,
+            stderr,
+            stdout,
+        });
+    }
+
+    for path in String::from_utf8_lossy(&output.stdout)
+        .split('\0')
+        .filter(|s| !s.is_empty())
+    {
+        combined_files.insert(repo_root.join(path));
+    }
+
+    Ok(())
+}
+
+fn build_scope_pathspecs(repo_root: &Path, scope_subdir: Option<&Path>) -> Vec<String> {
+    let mut specs = Vec::new();
+    if let Some(rel_path) = scope_subdir {
+        if rel_path.as_os_str().is_empty() {
+            return specs;
+        }
+
+        let absolute_path = repo_root.join(rel_path);
+        let normalized = normalize_for_git(rel_path);
+        if absolute_path.is_dir() {
+            let suffix = if normalized.ends_with('/') {
+                "**"
+            } else {
+                "/**"
+            };
+            let spec = format!(":(glob){}{}", normalized, suffix);
+            specs.push(spec);
+        } else {
+            specs.push(format!(":(glob){}", normalized));
+        }
+    }
+    specs
+}
+
+fn build_exclude_pathspecs(config: &GrabConfig) -> Vec<String> {
+    let mut specs = Vec::new();
+    let mut seen = HashSet::new();
+
+    if !config.include_default_output {
+        if seen.insert("dirgrab.txt".to_string()) {
+            debug!("Applying default exclusion for 'dirgrab.txt'");
+            specs.push(format!(":(glob,exclude){}", prefix_for_git("dirgrab.txt")));
+        }
+    } else {
+        info!("Default exclusion for 'dirgrab.txt' is disabled by configuration.");
+    }
+
+    for pattern in &config.exclude_patterns {
+        if seen.insert(pattern.clone()) {
+            specs.push(format!(":(glob,exclude){}", prefix_for_git(pattern)));
+        } else {
+            debug!(
+                "Skipping duplicate exclude pattern '{}' when building git pathspecs",
+                pattern
+            );
+        }
+    }
+
+    specs
+}
+
+fn normalize_for_git(path: &Path) -> String {
+    path.components()
+        .map(|comp| comp.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn prefix_for_git(pattern: &str) -> String {
+    if pattern.contains('/') {
+        pattern.to_string()
+    } else {
+        format!("**/{}", pattern)
+    }
 }

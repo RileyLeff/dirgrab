@@ -11,6 +11,7 @@ mod utils;
 // Necessary imports for lib.rs itself
 use log::{debug, error, info, warn};
 use std::io; // For io::ErrorKind // For logging within grab_contents
+use std::path::{Path, PathBuf};
 
 // Re-export public API components
 pub use config::GrabConfig;
@@ -43,10 +44,21 @@ pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
         (files, None)
     } else {
         let git_repo_root = listing::detect_git_repo(&target_path)?;
+        let scope_subdir = git_repo_root
+            .as_ref()
+            .and_then(|root| derive_scope_subdir(root, &target_path, config));
+
         let files = match &git_repo_root {
             Some(root) => {
                 info!("Operating in Git mode. Repo root: {:?}", root);
-                listing::list_files_git(root, config)?
+                if let Some(scope) = scope_subdir.as_deref() {
+                    info!("Limiting Git file listing to sub-path: {:?}", scope);
+                } else if !config.all_repo {
+                    debug!(
+                        "Scope calculation yielded full repository; processing entire repo contents."
+                    );
+                }
+                listing::list_files_git(root, config, scope_subdir.as_deref())?
             }
             None => {
                 info!("Operating in Non-Git mode. Target path: {:?}", target_path);
@@ -121,6 +133,27 @@ pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
 
     // Return the combined buffer (might contain only tree, or tree + content, or just content)
     Ok(output_buffer)
+}
+
+fn derive_scope_subdir(
+    repo_root: &Path,
+    target_path: &Path,
+    config: &GrabConfig,
+) -> Option<PathBuf> {
+    if config.all_repo {
+        return None;
+    }
+
+    match target_path.strip_prefix(repo_root) {
+        Ok(rel) => {
+            if rel.as_os_str().is_empty() {
+                None
+            } else {
+                Some(rel.to_path_buf())
+            }
+        }
+        Err(_) => None,
+    }
 }
 
 // --- FILE: dirgrab-lib/src/lib.rs ---
@@ -270,6 +303,7 @@ mod tests {
             no_git: true,                  // Force walkdir
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
         let files = crate::listing::list_files_walkdir(&path, &config)?; // Use crate:: path
         let expected_set = get_expected_set(
@@ -299,6 +333,7 @@ mod tests {
             no_git: true, // Force walkdir
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
         let files = crate::listing::list_files_walkdir(&path, &config)?; // Use crate:: path
         let expected_set = get_expected_set(
@@ -331,8 +366,9 @@ mod tests {
             no_git: false,                 // Use Git
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
-        let files = crate::listing::list_files_git(&path, &config)?; // Use crate:: path, pass repo root
+        let files = crate::listing::list_files_git(&path, &config, None)?; // Use crate:: path, pass repo root
         let expected_set = get_expected_set(
             &path,
             &[
@@ -368,8 +404,9 @@ mod tests {
             no_git: false,                 // Use Git
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
-        let files = crate::listing::list_files_git(&path, &config)?; // Use crate:: path
+        let files = crate::listing::list_files_git(&path, &config, None)?; // Use crate:: path
         let expected_set = get_expected_set(
             &path,
             &[
@@ -409,8 +446,9 @@ mod tests {
             no_git: false, // Use Git
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
-        let files = crate::listing::list_files_git(&path, &config)?; // Use crate:: path
+        let files = crate::listing::list_files_git(&path, &config, None)?; // Use crate:: path
         let expected_set = get_expected_set(&path, &[".gitignore"]); // Only .gitignore remains
         assert_paths_eq(files, expected_set);
         Ok(())
@@ -432,8 +470,9 @@ mod tests {
             no_git: false, // Use Git
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
-        let files = crate::listing::list_files_git(&path, &config)?; // Use crate:: path
+        let files = crate::listing::list_files_git(&path, &config, None)?; // Use crate:: path
         let expected_set = get_expected_set(
             &path,
             &[
@@ -461,6 +500,7 @@ mod tests {
             no_git: true,                 // Force walkdir
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
         let files = crate::listing::list_files_walkdir(&path, &config)?; // Use crate:: path
         let expected_set = get_expected_set(
@@ -499,8 +539,9 @@ mod tests {
             no_git: false,                // Use Git
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
-        let files = crate::listing::list_files_git(&path, &config)?; // Use crate:: path
+        let files = crate::listing::list_files_git(&path, &config, None)?; // Use crate:: path
         let expected_set = get_expected_set(
             &path,
             &[
@@ -532,8 +573,9 @@ mod tests {
             no_git: false,                // Use Git
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
-        let files = crate::listing::list_files_git(&path, &config)?; // Use crate:: path
+        let files = crate::listing::list_files_git(&path, &config, None)?; // Use crate:: path
         let expected_set = get_expected_set(
             &path,
             &[
@@ -565,8 +607,9 @@ mod tests {
             no_git: false,                // Use Git
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
-        let files = crate::listing::list_files_git(&path, &config)?; // Use crate:: path
+        let files = crate::listing::list_files_git(&path, &config, None)?; // Use crate:: path
         let expected_set = get_expected_set(
             &path,
             &[
@@ -578,6 +621,35 @@ mod tests {
                 // dirgrab.txt excluded by user pattern
             ],
         );
+        assert_paths_eq(files, expected_set);
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_files_git_scoped_to_subdir() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        if !setup_git_repo(&path)? {
+            println!("Skipping Git test: git not found or setup failed.");
+            return Ok(());
+        }
+
+        fs::write(path.join("deep/untracked_inside.txt"), "scoped content")?;
+
+        let config = GrabConfig {
+            target_path: path.join("deep"),
+            add_headers: false,
+            exclude_patterns: vec![],
+            include_untracked: true,
+            include_default_output: false,
+            no_git: false,
+            include_tree: false,
+            convert_pdf: false,
+            all_repo: false,
+        };
+        let scope = Path::new("deep");
+        let files = crate::listing::list_files_git(&path, &config, Some(scope))?;
+        let expected_set =
+            get_expected_set(&path, &["deep/sub/nested.txt", "deep/untracked_inside.txt"]);
         assert_paths_eq(files, expected_set);
         Ok(())
     }
@@ -598,6 +670,7 @@ mod tests {
             no_git: true,                  // Force walkdir
             include_tree: false,           // No tree for easier content check
             convert_pdf: false,
+            all_repo: false,
         };
         let result_string = grab_contents(&config)?;
 
@@ -647,6 +720,7 @@ mod tests {
             no_git: true, // Force walkdir
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
         let result_string = grab_contents(&config)?;
 
@@ -691,6 +765,7 @@ mod tests {
             no_git: true,                 // Force walkdir
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
         let result_string = grab_contents(&config)?;
         assert!(
@@ -720,6 +795,7 @@ mod tests {
             no_git: true,        // Force walkdir
             include_tree: false, // No tree
             convert_pdf: false,
+            all_repo: false,
         };
         let result_string = grab_contents(&config)?;
 
@@ -773,6 +849,7 @@ mod tests {
             no_git: false,       // Use Git mode
             include_tree: false, // No tree
             convert_pdf: false,
+            all_repo: false,
         };
         let result_string = grab_contents(&config)?; // Should still find files relative to repo root
 
@@ -789,18 +866,18 @@ mod tests {
         );
 
         // Check other files outside the target dir are also included and relative to root
-        let expected_root_header = format!("--- FILE: {} ---", Path::new(".gitignore").display());
+        let unexpected_root_header = format!("--- FILE: {} ---", Path::new(".gitignore").display());
         assert!(
-            result_string.contains(&expected_root_header),
-            "Root file header check. Expected '{}' in output:\n{}",
-            expected_root_header,
+            !result_string.contains(&unexpected_root_header),
+            "Scoped results should not include repo-root files. Unexpected '{}' in output:\n{}",
+            unexpected_root_header,
             result_string
         );
-        let expected_rs_header = format!("--- FILE: {} ---", Path::new("file2.rs").display());
+        let unexpected_rs_header = format!("--- FILE: {} ---", Path::new("file2.rs").display());
         assert!(
-            result_string.contains(&expected_rs_header),
-            "Root rs file header check. Expected '{}' in output:\n{}",
-            expected_rs_header,
+            !result_string.contains(&unexpected_rs_header),
+            "Scoped results should not include repo-root files. Unexpected '{}' in output:\n{}",
+            unexpected_rs_header,
             result_string
         );
         Ok(())
@@ -829,6 +906,7 @@ mod tests {
             no_git: true,                  // Force walkdir
             include_tree: true,            // THE flag to test
             convert_pdf: false,
+            all_repo: false,
         };
         let result = grab_contents(&config)?;
 
@@ -907,6 +985,7 @@ DIRECTORY STRUCTURE
             no_git: false,                                    // Use Git
             include_tree: true,                               // Include tree
             convert_pdf: false,
+            all_repo: false,
         };
         let result = grab_contents(&config)?;
 
@@ -971,6 +1050,7 @@ DIRECTORY STRUCTURE
             no_git: true,       // Use walkdir
             include_tree: true, // Ask for tree
             convert_pdf: false,
+            all_repo: false,
         };
         let result = grab_contents(&config)?;
         // Expect only the empty tree message
@@ -1080,6 +1160,7 @@ DIRECTORY STRUCTURE
             no_git: true, // Assume non-git mode for simplicity here
             include_tree: false,
             convert_pdf: false, // PDF conversion off
+            all_repo: false,
         };
         let result = crate::processing::process_files(&files_to_process, &config, None, &path)?; // Pass config
                                                                                                  // Expected content: file1, newline, newline, file2, newline, newline
@@ -1103,6 +1184,7 @@ DIRECTORY STRUCTURE
             no_git: false, // Git mode ON
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
         let result =
             crate::processing::process_files(&files_to_process, &config, repo_root, &path)?;
@@ -1128,6 +1210,7 @@ DIRECTORY STRUCTURE
             no_git: true, // Git mode OFF
             include_tree: false,
             convert_pdf: false,
+            all_repo: false,
         };
         let result = crate::processing::process_files(&files_to_process, &config, None, &path)?;
         let expected_content = format!(
@@ -1179,6 +1262,7 @@ DIRECTORY STRUCTURE
             no_git: true,
             include_tree: false,
             convert_pdf: true,
+            all_repo: false,
         };
 
         let result_string = grab_contents(&config)?;
@@ -1277,6 +1361,7 @@ DIRECTORY STRUCTURE
             no_git: true,
             include_tree: false,
             convert_pdf: false, // Disable PDF conversion
+            all_repo: false,
         };
 
         let result_string = grab_contents(&config)?;

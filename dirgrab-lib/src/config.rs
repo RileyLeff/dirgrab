@@ -50,4 +50,7 @@ pub struct GrabConfig {
 
     /// If true, attempt to extract text content from PDF files.
     pub convert_pdf: bool, // <-- Field added here
+
+    /// If true, operate on the entire Git repository even when the target path is a subdirectory.
+    pub all_repo: bool,
 }
