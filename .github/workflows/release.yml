@@ -28,6 +28,10 @@ env:
   CARGO_TERM_COLOR: always
   BIN_NAME: dirgrab # Your binary crate name
 
+# Allow release job to create GitHub releases
+permissions:
+  contents: write
+
 jobs:
   # This job builds the binary for various platforms
   build_binaries:
