@@ -208,15 +208,16 @@ jobs:
             echo "::warning::Could not find release notes for tag $TAG_NAME in CHANGELOG.md"
             RELEASE_BODY="No release notes found for tag ${{ github.ref_name }}."
           else
-            # Escape special characters for use in GitHub Actions output variable
-            RELEASE_BODY=$(echo "$CHANGELOG_CONTENT" | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+            RELEASE_BODY="$CHANGELOG_CONTENT"
           fi
         else
           echo "::warning::CHANGELOG.md not found."
           RELEASE_BODY="CHANGELOG.md not found."
         fi
         # Set the output for the release body
-        echo "release_body=$RELEASE_BODY" >> $GITHUB_OUTPUT
+        echo "release_body<<'EOF'" >> $GITHUB_OUTPUT
+        echo "$RELEASE_BODY" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
 
 
     - name: Create Release and Upload Assets
