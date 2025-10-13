@@ -215,9 +215,7 @@ jobs:
           RELEASE_BODY="CHANGELOG.md not found."
         fi
         # Set the output for the release body
-        echo "release_body<<'EOF'" >> $GITHUB_OUTPUT
-        echo "$RELEASE_BODY" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        printf "release_body<<EOF\n%s\nEOF\n" "$RELEASE_BODY" >> $GITHUB_OUTPUT
 
 
     - name: Create Release and Upload Assets
