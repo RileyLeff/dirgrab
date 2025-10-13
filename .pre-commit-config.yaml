@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: sync-readme
+        name: Sync workspace README to crates
+        entry: bash -c 'cp README.md dirgrab-lib/README.md && cp README.md dirgrab/README.md && git add dirgrab-lib/README.md dirgrab/README.md'
+        language: system
+        pass_filenames: false
+        always_run: true

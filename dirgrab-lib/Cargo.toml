@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core library for dirgrab: concatenates file contents from directories, respecting Git context."
-readme = "../README.md"
+readme = "README.md"
 
 [dependencies]
 ignore = "0.4.23"
