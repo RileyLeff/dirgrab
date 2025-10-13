@@ -1,5 +1,6 @@
 // --- FILE: dirgrab-lib/src/processing.rs ---
 
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,6 +37,7 @@ pub(crate) fn process_files(
             file_path.strip_prefix(target_path) // Non-Git mode always strips from target_path
         };
         let display_path = display_path_result.unwrap_or(file_path);
+        let display_path_ref = normalized_path(display_path);
 
         // --- Start PDF Handling ---
         let is_pdf = file_path
@@ -49,7 +51,7 @@ pub(crate) fn process_files(
                     if config.add_headers {
                         combined_content.push_str(&format!(
                             "--- FILE: {} (extracted text) ---\n",
-                            display_path.display()
+                            display_path_ref
                         ));
                     }
                     combined_content.push_str(&text);
@@ -67,7 +69,7 @@ pub(crate) fn process_files(
                     if config.add_headers {
                         combined_content.push_str(&format!(
                             "--- FILE: {} (PDF extraction failed) ---\n\n",
-                            display_path.display()
+                            display_path_ref
                         ));
                     }
                     continue;
@@ -83,8 +85,7 @@ pub(crate) fn process_files(
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(content) => {
                     if config.add_headers {
-                        combined_content
-                            .push_str(&format!("--- FILE: {} ---\n", display_path.display()));
+                        combined_content.push_str(&format!("--- FILE: {} ---\n", display_path_ref));
                     }
                     combined_content.push_str(&content);
                     if !content.ends_with('\n') {
@@ -104,4 +105,13 @@ pub(crate) fn process_files(
     } // End of loop through files
 
     Ok(combined_content)
+}
+
+fn normalized_path(path: &Path) -> Cow<'_, str> {
+    let raw = path.to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '\\' && raw.contains('\\') {
+        Cow::Owned(raw.replace('\\', "/"))
+    } else {
+        raw
+    }
 }
