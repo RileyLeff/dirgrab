@@ -172,6 +172,9 @@ jobs:
     needs: [build_binaries, create_source_archive]
 
     steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
@@ -222,64 +225,8 @@ jobs:
         # Automatically set the tag name from the workflow trigger
         tag_name: ${{ github.ref_name }}
         name: Release ${{ github.ref_name }}
-        # Use the changelog content as the release body, or a default message
-        body: |
-          ${{ steps.read_changelog.outputs.release_body }}
-
-          ## Installation (Homebrew)
-
-          To install `dirgrab` via Homebrew, you'll first need to create a Homebrew tap repository (if you haven't already).
-
-          A common naming convention for a tap is `homebrew-<your-tap-name>`. Let's assume you name it `homebrew-dirgrab`.
-          Create a new GitHub repository named `homebrew-dirgrab` under your account (`rileyleff/homebrew-dirgrab`).
-
-          Inside this new tap repository, you'll need to create a Ruby file for the formula.
-          The formula file should be placed in `Formula/dirgrab.rb`.
-
-          You can use the `brew create` command to generate a starting point for your formula locally:
-
-          ```bash
-          brew create --url https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ needs.create_source_archive.outputs.archive_name }} --sha256 ${{ needs.create_source_archive.outputs.sha256_hash }} dirgrab
-          ```
-
-          Edit the generated `dirgrab.rb` file to configure the build and installation steps. For a Rust project building from source:
-
-          ```ruby
-          class Dirgrab < Formula
-            desc "CLI tool to concatenate file contents from directories"
-            homepage "https://github.com/rileyleff/dirgrab" # Your project homepage
-            url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ needs.create_source_archive.outputs.archive_name }}"
-            sha256 "${{ needs.create_source_archive.outputs.sha256_hash }}"
-            license "MIT OR Apache-2.0" # Ensure this matches your LICENSE files
-            head "https://github.com/rileyleff/dirgrab.git", branch: "main" # Update branch if needed
-
-            depends_on "rust" => :build # Build dependency for Rust projects
-
-            def install
-              # Instructions on how to install after downloading and extracting the source archive
-              # This example uses cargo install --path . to build from the extracted source
-              system "cargo", "install", "--path", ".", "--root", prefix, "--bin", "dirgrab"
-            end
-
-            test do
-              # Test the installed binary
-              # Replace with a simple test for your CLI tool
-              assert_match "dirgrab version", shell_output("#{bin}/dirgrab --version")
-            end
-          end
-          ```
-
-          After creating/updating the `Formula/dirgrab.rb` file in your tap repository, commit and push the changes.
-
-          Users can then install your tool:
-
-          ```bash
-          brew tap rileyleff/dirgrab # Replace with your username and tap name
-          brew install dirgrab
-          ```
-
-          **Binary Assets (Bottles):**
-          The following pre-built binaries are attached to this release:
+        # Use the changelog content as the release body
+        body: ${{ steps.read_changelog.outputs.release_body }}
 
         draft: false # Set to true if you want to manually publish the release later
         prerelease: ${{ contains(github.ref_name, '-') }} # Automatically mark as prerelease for tags like v1.0.0-rc1
