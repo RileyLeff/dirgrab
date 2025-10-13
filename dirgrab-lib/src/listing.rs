@@ -39,13 +39,13 @@ pub(crate) fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !stdout.is_empty() {
-            let root_path =
-                PathBuf::from(stdout)
-                    .canonicalize()
-                    .map_err(|e| GrabError::IoError {
-                        path: PathBuf::from("detected git root"),
-                        source: e,
-                    })?;
+            let root_path_raw = PathBuf::from(&stdout);
+            let root_path = root_path_raw
+                .canonicalize()
+                .map_err(|e| GrabError::IoError {
+                    path: root_path_raw.clone(),
+                    source: e,
+                })?;
             debug!("Detected Git repo root: {:?}", root_path);
             Ok(Some(root_path))
         } else {
@@ -57,9 +57,13 @@ pub(crate) fn detect_git_repo(path: &Path) -> GrabResult<Option<PathBuf>> {
         }
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("not a git repository")
-            || stderr.contains("fatal: detected dubious ownership in repository at")
-        {
+        if stderr.contains("fatal: detected dubious ownership in repository at") {
+            warn!(
+                "Git reports 'dubious ownership' for {:?}. Falling back to non-git mode. Consider running: git config --global --add safe.directory {:?}",
+                path, path
+            );
+            Ok(None)
+        } else if stderr.contains("not a git repository") {
             debug!(
                 "Path is not inside a Git repository (based on stderr): {:?}",
                 path
@@ -136,7 +140,8 @@ pub(crate) fn list_files_walkdir(
 
     // Add default exclusions for dirgrab.txt (conditionally) and .git/
     if !config.include_default_output {
-        if let Err(e) = exclude_builder.add_line(None, "dirgrab.txt") {
+        let pattern = normalize_glob("dirgrab.txt");
+        if let Err(e) = exclude_builder.add_line(None, &pattern) {
             warn!("Failed to add default exclusion pattern 'dirgrab.txt': {}. This exclusion might not apply.", e);
         } else {
             debug!("Applying default exclusion for 'dirgrab.txt'");
@@ -145,7 +150,8 @@ pub(crate) fn list_files_walkdir(
         info!("Default exclusion for 'dirgrab.txt' is disabled by --include-default-output flag.");
     }
     // Always exclude the .git directory when using walkdir
-    if let Err(e) = exclude_builder.add_line(None, ".git/") {
+    let git_dir_pattern = normalize_glob(".git/");
+    if let Err(e) = exclude_builder.add_line(None, &git_dir_pattern) {
         warn!(
             "Failed to add default exclusion pattern '.git/': {}. Git directory might be included.",
             e
@@ -156,7 +162,8 @@ pub(crate) fn list_files_walkdir(
 
     // Add user-provided exclusion patterns
     for pattern in &config.exclude_patterns {
-        if let Err(e) = exclude_builder.add_line(None, pattern) {
+        let normalized = normalize_glob(pattern);
+        if let Err(e) = exclude_builder.add_line(None, &normalized) {
             error!(
                 "Failed to add exclude pattern '{}': {}. This pattern will be ignored.",
                 pattern, e
@@ -167,8 +174,9 @@ pub(crate) fn list_files_walkdir(
         .build()
         .map_err(GrabError::GlobMatcherBuildError)?;
 
-    // Use WalkDir with the custom matcher applied via filtering
-    for entry_result in WalkDir::new(target_path) {
+    // Walk directory while pruning ignored subtrees early.
+    let mut walker = WalkDir::new(target_path).into_iter();
+    while let Some(entry_result) = walker.next() {
         let entry = match entry_result {
             Ok(entry) => entry,
             Err(e) => {
@@ -186,25 +194,33 @@ pub(crate) fn list_files_walkdir(
 
         let path = entry.path();
 
-        // Skip non-files early
+        if entry.file_type().is_dir() {
+            if matches!(
+                exclude_matcher.matched_path_or_any_parents(path, true),
+                Match::Ignore(_)
+            ) {
+                debug!(
+                    "Pruning directory due to pattern match on path or parent (walkdir): {:?}",
+                    path
+                );
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+
         if !entry.file_type().is_file() {
             continue;
         }
 
-        // Apply exclusion rules using the patterns.
-        // Use matched_path_or_any_parents to correctly handle directory exclusions like "subdir/"
         match exclude_matcher.matched_path_or_any_parents(path, false) {
             Match::None | Match::Whitelist(_) => {
-                // Not ignored, add it
                 files.push(path.to_path_buf());
             }
             Match::Ignore(_) => {
-                // Ignored by a pattern (could be the path itself or a parent dir)
                 debug!(
                     "Excluding file due to pattern match on path or parent (walkdir): {:?}",
                     path
                 );
-                continue; // Skip this file
             }
         }
     }
@@ -280,17 +296,19 @@ fn build_exclude_pathspecs(config: &GrabConfig) -> Vec<String> {
     let mut seen = HashSet::new();
 
     if !config.include_default_output {
-        if seen.insert("dirgrab.txt".to_string()) {
+        let normalized = normalize_glob("dirgrab.txt");
+        if seen.insert(normalized.clone()) {
             debug!("Applying default exclusion for 'dirgrab.txt'");
-            specs.push(format!(":(glob,exclude){}", prefix_for_git("dirgrab.txt")));
+            specs.push(format!(":(glob,exclude){}", prefix_for_git(&normalized)));
         }
     } else {
         info!("Default exclusion for 'dirgrab.txt' is disabled by configuration.");
     }
 
     for pattern in &config.exclude_patterns {
-        if seen.insert(pattern.clone()) {
-            specs.push(format!(":(glob,exclude){}", prefix_for_git(pattern)));
+        let normalized = normalize_glob(pattern);
+        if seen.insert(normalized.clone()) {
+            specs.push(format!(":(glob,exclude){}", prefix_for_git(&normalized)));
         } else {
             debug!(
                 "Skipping duplicate exclude pattern '{}' when building git pathspecs",
@@ -315,4 +333,8 @@ fn prefix_for_git(pattern: &str) -> String {
     } else {
         format!("**/{}", pattern)
     }
+}
+
+fn normalize_glob(pattern: &str) -> String {
+    pattern.replace('\\', "/")
 }

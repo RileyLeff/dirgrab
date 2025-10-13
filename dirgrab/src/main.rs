@@ -267,9 +267,9 @@ fn build_token_basis<'a>(
 fn strip_tree_section(content: &str) -> String {
     const FILE_CONTENTS_HEADER: &str = "---\nFILE CONTENTS\n---\n\n";
     if let Some(idx) = content.find(FILE_CONTENTS_HEADER) {
-        content[idx..].to_string()
+        content[idx + FILE_CONTENTS_HEADER.len()..].to_string()
     } else {
-        String::new()
+        content.to_string()
     }
 }
 

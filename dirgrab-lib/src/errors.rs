@@ -45,33 +45,11 @@ pub enum GrabError {
         source: io::Error,
     },
 
-    /// A file identified for processing could not be read as valid UTF-8 data.
-    /// This usually indicates a binary file. In the default implementation of
-    /// `grab_contents`, such files are logged as a warning and skipped, rather
-    /// than returning this error directly.
-    #[error("Failed to read non-UTF8 file: {0}")]
-    NonUtf8File(PathBuf),
-
-    /// Although `detect_git_repo` attempts to handle cases where a path is not
-    /// in a repository gracefully (by returning `Ok(None)`), this error might
-    /// occur if an unexpected issue prevents determining the root definitively.
-    #[error("Could not determine repository root for: {0}")]
-    RepoRootNotFound(PathBuf),
-
     /// Failed to build the glob pattern matcher from the patterns provided
     /// in `GrabConfig::exclude_patterns`. This might happen if a pattern has
     /// invalid syntax according to the `ignore` crate.
     #[error("Failed to build glob pattern matcher: {0}")]
     GlobMatcherBuildError(#[source] ignore::Error),
-
-    /// An error occurred during directory traversal when operating in non-Git mode,
-    /// likely related to permissions or accessing a specific directory entry.
-    /// The default behavior logs a warning and skips the problematic entry.
-    #[error("Error walking directory {path_display}: {source_str}")]
-    WalkdirError {
-        path_display: String,
-        source_str: String,
-    },
 
     /// Error specifically for path stripping issues during tree generation.
     #[error("Failed to strip prefix '{prefix}' from path '{path}' during tree generation")]

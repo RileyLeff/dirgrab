@@ -20,7 +20,6 @@ pub use errors::{GrabError, GrabResult};
 // --- Main Public Function ---
 
 /// Performs the main `dirgrab` operation based on the provided configuration.
-#[doc = include_str!("../README.md")]
 pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
     info!("Starting dirgrab operation with config: {:?}", config);
 
@@ -227,11 +226,7 @@ mod tests {
         args: &[&str],
         current_dir: &Path,
     ) -> Result<std::process::Output> {
-        // println!("Running test command: {} {:?} in {:?}", cmd, args, current_dir);
-        let output = Command::new(cmd)
-            .args(args)
-            .current_dir(current_dir)
-            .output()?;
+        let output = crate::utils::run_command(cmd, args, current_dir)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);

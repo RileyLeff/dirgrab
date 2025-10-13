@@ -237,7 +237,7 @@ jobs:
           You can use the `brew create` command to generate a starting point for your formula locally:
 
           ```bash
-          brew create --url ${{ github.repository_url }}/releases/download/${{ github.ref_name }}/${{ needs.create_source_archive.outputs.archive_name }} --sha256 ${{ needs.create_source_archive.outputs.sha256_hash }} dirgrab
+          brew create --url https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ needs.create_source_archive.outputs.archive_name }} --sha256 ${{ needs.create_source_archive.outputs.sha256_hash }} dirgrab
           ```
 
           Edit the generated `dirgrab.rb` file to configure the build and installation steps. For a Rust project building from source:
@@ -246,7 +246,7 @@ jobs:
           class Dirgrab < Formula
             desc "CLI tool to concatenate file contents from directories"
             homepage "https://github.com/rileyleff/dirgrab" # Your project homepage
-            url "${{ github.repository_url }}/releases/download/${{ github.ref_name }}/${{ needs.create_source_archive.outputs.archive_name }}"
+            url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ needs.create_source_archive.outputs.archive_name }}"
             sha256 "${{ needs.create_source_archive.outputs.sha256_hash }}"
             license "MIT OR Apache-2.0" # Ensure this matches your LICENSE files
             head "https://github.com/rileyleff/dirgrab.git", branch: "main" # Update branch if needed

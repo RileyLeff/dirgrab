@@ -196,12 +196,15 @@ impl PatternAccumulator {
         if candidate.is_empty() {
             return;
         }
-        let owned = candidate.to_string();
-        if self.seen.insert(owned.clone()) {
-            debug!("Adding exclude pattern: {}", owned);
-            self.patterns.push(owned);
+        let normalized = normalize_glob(candidate);
+        if normalized.is_empty() {
+            return;
+        }
+        if self.seen.insert(normalized.clone()) {
+            debug!("Adding exclude pattern: {}", normalized);
+            self.patterns.push(normalized);
         } else {
-            debug!("Skipping duplicate exclude pattern: {}", owned);
+            debug!("Skipping duplicate exclude pattern: {}", normalized);
         }
     }
 
@@ -218,6 +221,10 @@ impl PatternAccumulator {
     fn into_vec(self) -> Vec<String> {
         self.patterns
     }
+}
+
+fn normalize_glob(pattern: &str) -> String {
+    pattern.replace('\\', "/")
 }
 
 fn apply_config_file(
