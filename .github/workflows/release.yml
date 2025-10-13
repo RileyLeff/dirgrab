@@ -137,10 +137,8 @@ jobs:
         # git ls-files -z outputs null-delimited paths, xargs -0 handles this safely.
         # -C . ensures paths in the tarball are relative to the project root.
         # Also explicitly include top-level non-source files usually needed.
-        {
-          git ls-files -z
-          printf "%s\0" README.md LICENSE-APACHE LICENSE-MIT .gitignore .pre-commit-config.yaml Cargo.lock
-        } | tar --null --owner=root --group=root -czf "$ARCHIVE_NAME" -T -
+        git ls-files -z \
+          | tar --null --owner=root --group=root -czf "$ARCHIVE_NAME" -T -
 
         echo "Generated source archive: $ARCHIVE_NAME"
         echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT # Set step output for archive name
