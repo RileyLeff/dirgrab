@@ -59,7 +59,7 @@ pub(crate) struct Cli {
 
     /// Add patterns to exclude files or directories. Can be used multiple times.
     /// Uses .gitignore glob syntax. Examples: -e "*.log" -e "target/"
-    #[arg(short = 'e', long = "exclude", value_name = "PATTERN")]
+    #[arg(short = 'e', long = "exclude", value_name = "PATTERN", num_args = 1..)]
     exclude_patterns: Vec<String>,
 
     /// Include the default output file ('dirgrab.txt') if it exists and isn't otherwise excluded.
@@ -482,6 +482,12 @@ mod tests {
         let without_headers = compute_file_token_stats(&content, &files_no_header, &stats);
         assert_eq!(without_headers.len(), 1);
         assert_eq!(without_headers[0].char_count, body.chars().count());
+    }
+
+    #[test]
+    fn exclude_flag_accepts_multiple_tokens() {
+        let cli = Cli::parse_from(["dirgrab", "-e", "foo", "bar", "-e", "baz"]);
+        assert_eq!(cli.exclude_patterns, vec!["foo", "bar", "baz"]);
     }
 }
 

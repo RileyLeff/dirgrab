@@ -15,6 +15,15 @@
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap rileyleff/rileytap
+brew install dirgrab
+```
+
+### Cargo
+
 ```bash
 cargo install dirgrab
 # or from a local checkout
@@ -41,6 +50,8 @@ dirgrab [OPTIONS] [TARGET_PATH]
 - `-c, --clipboard` – copy to the system clipboard instead of stdout or a file.
 - `--no-headers` / `--no-tree` / `--no-pdf` – disable headers, the directory tree, or PDF extraction.
 - `-e, --exclude <PATTERN>` – add glob-style excludes (applied after config files).
+  You can follow a single `-e` with multiple patterns (e.g. `-e foo bar baz`).
+  Quote shell globs (e.g. `-e 'integration_tests/*'`) so your shell passes the pattern instead of expanding it.
 - `--tracked-only` – Git mode: limit to tracked files. (Compatibility note: `-u/--include-untracked` still forces inclusion if you need it.)
 - `--all-repo` – Git mode: operate on the entire repository even if the target is a subdirectory.
 - `--include-default-output` – allow `dirgrab.txt` back into the run.

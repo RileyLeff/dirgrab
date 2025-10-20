@@ -4,6 +4,16 @@ All notable changes to this project are tracked here. New releases follow
 semantic versioning (major.minor.patch). For details on upcoming work, check
 open issues and milestones.
 
+## [0.3.2] - 2025-02-15
+
+- Fixed `-e/--exclude` so a single flag can absorb every shell-expanded
+  argument (e.g., `-e integration_tests/*`), avoiding clap parse errors when
+  globbing produces multiple paths.
+- Documented quoting expectations for exclude globs and added Homebrew install
+  instructions in the READMEs.
+- Ran `cargo update` to resolve the warning about the yanked `deranged` crate
+  and refresh other transitive dependencies.
+
 ## [0.3.1] - 2025-02-14
 
 - Expanded `-s/--stats` into a multi-report flag with defaults for totals and
