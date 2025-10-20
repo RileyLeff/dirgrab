@@ -23,6 +23,65 @@ pub struct StatsSettings {
     pub token_ratio: f64,
     pub exclude_tree: bool,
     pub exclude_headers: bool,
+    pub reports: Vec<StatsReport>,
+}
+
+#[derive(Debug, Clone)]
+pub enum StatsReport {
+    Overview,
+    TopFiles { count: usize },
+}
+
+#[derive(Debug, Clone)]
+pub enum StatsReportSpec {
+    Default,
+    Explicit(StatsReport),
+}
+
+pub const DEFAULT_STATS_SENTINEL: &str = "__default__";
+pub const DEFAULT_TOP_FILES_COUNT: usize = 5;
+
+pub fn default_stats_reports() -> Vec<StatsReport> {
+    vec![
+        StatsReport::Overview,
+        StatsReport::TopFiles {
+            count: DEFAULT_TOP_FILES_COUNT,
+        },
+    ]
+}
+
+pub fn parse_stats_report_spec(raw: &str) -> Result<StatsReportSpec, String> {
+    if raw.eq_ignore_ascii_case(DEFAULT_STATS_SENTINEL) || raw.eq_ignore_ascii_case("default") {
+        return Ok(StatsReportSpec::Default);
+    }
+
+    if raw.eq_ignore_ascii_case("overview") {
+        return Ok(StatsReportSpec::Explicit(StatsReport::Overview));
+    }
+
+    if let Some((name, value)) = raw.split_once('=') {
+        return match name {
+            "top-files" => {
+                let count = value.parse::<usize>().map_err(|_| {
+                    format!(
+                        "Invalid top-files count '{}'. Expected a positive integer.",
+                        value
+                    )
+                })?;
+                if count == 0 {
+                    return Err("top-files count must be greater than 0".to_string());
+                }
+                Ok(StatsReportSpec::Explicit(StatsReport::TopFiles { count }))
+            }
+            other => Err(format!("Unknown stats report '{}'", other)),
+        };
+    }
+
+    if raw.eq_ignore_ascii_case("top-files") {
+        return Err("top-files requires a count, e.g. --stats top-files=5".to_string());
+    }
+
+    Err(format!("Unknown stats report '{}'", raw))
 }
 
 const DEFAULT_TOKEN_RATIO: f64 = 3.6;
@@ -113,8 +172,24 @@ pub fn build_run_settings(cli: &Cli, target_path: &Path) -> Result<RunSettings> 
     }
 
     // Stats merging
-    if cli.print_stats {
+    if let Some(cli_specs) = cli.stats.as_ref() {
         stats_acc.enabled = Some(true);
+        let mut explicit = Vec::new();
+        let mut saw_default = false;
+        for spec in cli_specs {
+            match spec {
+                StatsReportSpec::Default => saw_default = true,
+                StatsReportSpec::Explicit(report) => explicit.push(report.clone()),
+            }
+        }
+        if saw_default && !explicit.is_empty() {
+            bail!("--stats default cannot be combined with explicit reports");
+        }
+        if saw_default {
+            stats_acc.reports = None; // defer to defaults
+        } else {
+            stats_acc.reports = Some(explicit);
+        }
     }
     if let Some(ratio) = cli.token_ratio {
         if ratio <= 0.0 {
@@ -134,6 +209,10 @@ pub fn build_run_settings(cli: &Cli, target_path: &Path) -> Result<RunSettings> 
         token_ratio: stats_acc.token_ratio.unwrap_or(DEFAULT_TOKEN_RATIO),
         exclude_tree: stats_acc.exclude_tree.unwrap_or(false),
         exclude_headers: stats_acc.exclude_headers.unwrap_or(false),
+        reports: stats_acc
+            .reports
+            .clone()
+            .unwrap_or_else(default_stats_reports),
     };
 
     let grab_config = GrabConfig {
@@ -182,6 +261,7 @@ struct StatsAccum {
     token_ratio: Option<f64>,
     exclude_tree: Option<bool>,
     exclude_headers: Option<bool>,
+    reports: Option<Vec<StatsReport>>, // None -> defer to default bundle
 }
 
 #[derive(Debug, Default)]
@@ -315,6 +395,29 @@ fn apply_stats_section(section: StatsSection, stats: &mut StatsAccum) -> Result<
         stats.exclude_tree = Some(exclude_tree);
         stats.exclude_headers = Some(exclude_headers);
     }
+    if let Some(report_entries) = section.reports {
+        let mut parsed = Vec::new();
+        let mut saw_default = false;
+        for raw in report_entries {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match parse_stats_report_spec(trimmed) {
+                Ok(StatsReportSpec::Default) => saw_default = true,
+                Ok(StatsReportSpec::Explicit(report)) => parsed.push(report),
+                Err(msg) => bail!("{}", msg),
+            }
+        }
+        if saw_default && !parsed.is_empty() {
+            bail!("stats.reports cannot mix 'default' with other values");
+        }
+        if saw_default {
+            stats.reports = None;
+        } else {
+            stats.reports = Some(parsed);
+        }
+    }
 
     Ok(())
 }
@@ -366,6 +469,7 @@ struct StatsSection {
     enabled: Option<bool>,
     token_ratio: Option<f64>,
     tokens_exclude: Option<Vec<String>>,
+    reports: Option<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -449,7 +553,7 @@ tokens_exclude = ["tree"]
         cli.include_untracked_flag = true;
         cli.tokens_exclude_headers = true;
         cli.token_ratio = Some(5.0);
-        cli.print_stats = true;
+        cli.stats = Some(vec![StatsReportSpec::Default]);
         cli.output = Some(PathBuf::from("out.txt"));
 
         let settings = build_run_settings(&cli, &target)?;
@@ -469,6 +573,15 @@ tokens_exclude = ["tree"]
         assert!(stats.exclude_tree);
         assert!(stats.exclude_headers);
         assert!((stats.token_ratio - 5.0).abs() < f64::EPSILON);
+        assert!(matches!(
+            stats.reports.as_slice(),
+            [
+                StatsReport::Overview,
+                StatsReport::TopFiles {
+                    count: DEFAULT_TOP_FILES_COUNT
+                }
+            ]
+        ));
 
         Ok(())
     }
@@ -507,6 +620,15 @@ tokens_exclude = ["tree"]
         assert!((stats.token_ratio - DEFAULT_TOKEN_RATIO).abs() < f64::EPSILON);
         assert!(!stats.exclude_tree);
         assert!(!stats.exclude_headers);
+        assert!(matches!(
+            stats.reports.as_slice(),
+            [
+                StatsReport::Overview,
+                StatsReport::TopFiles {
+                    count: DEFAULT_TOP_FILES_COUNT
+                }
+            ]
+        ));
 
         Ok(())
     }

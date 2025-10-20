@@ -10,7 +10,7 @@
 - 🔧 **Configurable defaults** – merge built-in defaults with global `config.toml`, project-local `.dirgrab.toml`, `.dirgrabignore`, and CLI flags.
 - 🧭 **Git-aware out of the box** – untracked files are included by default, scoped to the selected subdirectory, with `--tracked-only` and `--all-repo` to opt out.
 - 🗂️ **Structured context** – optional directory tree, per-file headers, PDF text extraction, and deterministic file ordering for stable diffs.
-- 🧮 **Better stats** – `-s/--stats` now prints bytes, words, and an approximate token count with configurable ratio and exclusion toggles.
+- 🧮 **Better stats** – `-s/--stats` now prints summary totals plus a per-file token leaderboard, and you can pick which reports to show each run.
 - 🙅 **Safety nets** – automatically ignores the active output file, respects `.gitignore`, and gracefully skips binary/non-UTF8 files.
 
 ## Installation
@@ -49,7 +49,7 @@ dirgrab [OPTIONS] [TARGET_PATH]
 - `--config <FILE>` – load an additional TOML config file (applied after global/local unless `--no-config`).
 - `--token-ratio <FLOAT>` – override the characters-to-tokens ratio used by `--stats` (defaults to 3.6).
 - `--tokens-exclude-tree` / `--tokens-exclude-headers` – subtract tree or header sections when estimating tokens.
-- `-s, --stats` – print bytes, words, and approximate tokens to stderr when finished.
+- `-s, --stats [REPORT...]` – print stats reports to stderr. Defaults to `overview` + `top-files=5`; provide explicit reports like `--stats overview top-files=10`.
 - `-v, -vv, -vvv` – increase log verbosity (Warn, Info, Debug, Trace).
 - `-h, --help` / `-V, --version` – CLI boilerplate.
 
@@ -81,6 +81,7 @@ all_repo = false
 enabled = true
 token_ratio = 3.6
 tokens_exclude = ["tree"]
+reports = ["overview", "top-files=8"]
 ```
 
 `ignore` files use the same syntax as `.gitignore`. CLI `-e` patterns and the active output file name are appended last, so the freshly written file is never re-ingested accidentally.
@@ -109,7 +110,7 @@ dirgrab --no-config --no-tree --no-headers
 - **Git scope & ordering** – Paths are gathered via `git ls-files`, scoped to the target subtree unless `--all-repo` is set, and the final list is sorted for deterministic output. Non-Git mode uses `walkdir` with the same ordering.
 - **File headers & tree** – Headers and tree sections remain enabled by default; toggle them per run or through config files.
 - **PDF handling** – Text is extracted from PDFs unless disabled. Failures and binary files are skipped with informative (but less noisy) logs.
-- **Stats** – When `--stats` is active (or enabled in config), stderr shows bytes, words, and an approximate token count. Exclude tree/headers or change the ratio via config or CLI.
+- **Stats** – When `--stats` is active (or enabled in config), stderr shows the requested reports (default: totals + top files). Exclude tree/headers, adjust the ratio, or pick different reports via config or CLI.
 - **Safety** – `dirgrab.txt` stays excluded unless explicitly re-enabled, and any active `-o FILE` target is auto-excluded for that run.
 
 ## Library (`dirgrab-lib`)

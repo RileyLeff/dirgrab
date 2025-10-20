@@ -4,6 +4,15 @@ All notable changes to this project are tracked here. New releases follow
 semantic versioning (major.minor.patch). For details on upcoming work, check
 open issues and milestones.
 
+## [0.3.1] - 2025-02-14
+
+- Expanded `-s/--stats` into a multi-report flag with defaults for totals and
+  `top-files=5`, plus support for selecting custom report bundles (e.g.
+  `--stats overview top-files=10`).
+- Added a per-file token leaderboard to the CLI stats output and exposed
+  detailed file metadata via the new `grab_contents_detailed` API in
+  `dirgrab-lib`.
+
 ## [0.3.0]
 
 - Added layered configuration (global `config.toml`/`ignore`, project
@@ -30,4 +39,3 @@ open issues and milestones.
 
 - Initial release: Git-aware file selection, clipboard and file outputs,
   excludes, headers, and verbosity controls.
-

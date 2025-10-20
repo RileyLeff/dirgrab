@@ -11,16 +11,36 @@ mod utils;
 // Necessary imports for lib.rs itself
 use log::{debug, error, info, warn};
 use std::io; // For io::ErrorKind // For logging within grab_contents
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 // Re-export public API components
 pub use config::GrabConfig;
 pub use errors::{GrabError, GrabResult};
 
+#[derive(Debug, Clone)]
+pub struct GrabbedFile {
+    pub display_path: String,
+    pub full_range: Range<usize>,
+    pub header_range: Option<Range<usize>>,
+    pub body_range: Range<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GrabOutput {
+    pub content: String,
+    pub files: Vec<GrabbedFile>,
+}
+
 // --- Main Public Function ---
 
 /// Performs the main `dirgrab` operation based on the provided configuration.
 pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
+    grab_contents_detailed(config).map(|output| output.content)
+}
+
+/// Performs the main `dirgrab` operation and returns file-level metadata along with the content.
+pub fn grab_contents_detailed(config: &GrabConfig) -> GrabResult<GrabOutput> {
     info!("Starting dirgrab operation with config: {:?}", config);
 
     // Canonicalize cleans the path and checks existence implicitly via OS call
@@ -71,6 +91,7 @@ pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
 
     // Initialize output buffer
     let mut output_buffer = String::new();
+    let mut file_segments = Vec::new();
 
     // Generate and prepend tree if requested
     if config.include_tree {
@@ -78,9 +99,10 @@ pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
             warn!("--include-tree specified, but no files were selected for processing. Tree will be empty.");
             // Keep explicit tree header even if empty
             output_buffer.push_str("---\nDIRECTORY STRUCTURE (No files selected)\n---\n\n");
-            // Don't return early here if we might still process files (though files_to_process is empty...)
-            // Let's adjust: return here ONLY if tree requested AND no files.
-            return Ok(output_buffer);
+            return Ok(GrabOutput {
+                content: output_buffer,
+                files: Vec::new(),
+            });
         } else {
             // Determine base path for tree (repo root if git mode, target path otherwise)
             let base_path_for_tree = if !config.no_git && maybe_repo_root.is_some() {
@@ -111,27 +133,39 @@ pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
     // Process files and append content (only if files exist)
     if !files_to_process.is_empty() {
         // Updated call to process_files to pass the whole config struct
-        match processing::process_files(
+        let processed = processing::process_files(
             &files_to_process,
             config, // Pass config struct
             maybe_repo_root.as_deref(),
             &target_path,
-        ) {
-            Ok(content) => output_buffer.push_str(&content),
-            Err(e) => {
-                error!("Failed during file content processing: {}", e);
-                return Err(e); // Propagate error if processing fails fundamentally
-            }
+        )?;
+        let base_offset = output_buffer.len();
+        output_buffer.push_str(&processed.content);
+        for segment in processed.files {
+            file_segments.push(GrabbedFile {
+                display_path: segment.display_path,
+                full_range: offset_range(&segment.full_range, base_offset),
+                header_range: segment
+                    .header_range
+                    .map(|range| offset_range(&range, base_offset)),
+                body_range: offset_range(&segment.body_range, base_offset),
+            });
         }
     } else if !config.include_tree {
         // If no files AND no tree was requested
         warn!("No files selected for processing based on current configuration.");
         // Return empty string only if no files were found AND tree wasn't requested/generated.
-        return Ok(String::new());
+        return Ok(GrabOutput {
+            content: String::new(),
+            files: Vec::new(),
+        });
     }
 
     // Return the combined buffer (might contain only tree, or tree + content, or just content)
-    Ok(output_buffer)
+    Ok(GrabOutput {
+        content: output_buffer,
+        files: file_segments,
+    })
 }
 
 fn derive_scope_subdir(
@@ -153,6 +187,10 @@ fn derive_scope_subdir(
         }
         Err(_) => None,
     }
+}
+
+fn offset_range(range: &Range<usize>, offset: usize) -> Range<usize> {
+    (range.start + offset)..(range.end + offset)
 }
 
 // --- FILE: dirgrab-lib/src/lib.rs ---
@@ -1157,10 +1195,20 @@ DIRECTORY STRUCTURE
             convert_pdf: false, // PDF conversion off
             all_repo: false,
         };
-        let result = crate::processing::process_files(&files_to_process, &config, None, &path)?; // Pass config
-                                                                                                 // Expected content: file1, newline, newline, file2, newline, newline
+        let result = crate::processing::process_files(&files_to_process, &config, None, &path)?;
         let expected_content = "Content of file 1.\n\nfn main() {}\n\n";
-        assert_eq!(result, expected_content); // Compare exact expected string
+        assert_eq!(result.content, expected_content);
+        assert_eq!(result.files.len(), 2);
+        assert_eq!(result.files[0].display_path, "file1.txt");
+        assert!(result.files[0].header_range.is_none());
+        assert_eq!(
+            &result.content[result.files[0].body_range.clone()],
+            "Content of file 1.\n\n"
+        );
+        assert_eq!(
+            &result.content[result.files[1].body_range.clone()],
+            "fn main() {}\n\n"
+        );
         Ok(())
     }
 
@@ -1188,7 +1236,19 @@ DIRECTORY STRUCTURE
             Path::new("file1.txt").display(), // Paths relative to repo_root (which is path)
             Path::new("file2.rs").display()
         );
-        assert_eq!(result, expected_content);
+        assert_eq!(result.content, expected_content);
+        assert_eq!(result.files.len(), 2);
+        assert!(result.files.iter().all(|seg| seg.header_range.is_some()));
+        let first = &result.files[0];
+        assert_eq!(first.display_path, "file1.txt");
+        assert_eq!(
+            &result.content[first.header_range.clone().unwrap()],
+            "--- FILE: file1.txt ---\n"
+        );
+        assert_eq!(
+            &result.content[first.body_range.clone()],
+            "Content of file 1.\n\n"
+        );
         Ok(())
     }
 
@@ -1213,7 +1273,8 @@ DIRECTORY STRUCTURE
             Path::new("file1.txt").display(), // Paths relative to target_path
             Path::new("subdir/another.txt").display()
         );
-        assert_eq!(result, expected_content);
+        assert_eq!(result.content, expected_content);
+        assert_eq!(result.files.len(), 2);
         Ok(())
     }
 

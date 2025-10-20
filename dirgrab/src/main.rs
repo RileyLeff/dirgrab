@@ -3,8 +3,10 @@
 use anyhow::{Context, Result};
 use arboard::Clipboard;
 use clap::Parser;
-use config_loader::{build_run_settings, StatsSettings};
-use dirgrab_lib::{grab_contents, GrabConfig};
+use config_loader::{
+    build_run_settings, parse_stats_report_spec, StatsReport, StatsReportSpec, StatsSettings,
+};
+use dirgrab_lib::{grab_contents_detailed, GrabConfig, GrabOutput, GrabbedFile};
 use log::{debug, error, info, LevelFilter};
 use std::borrow::Cow;
 use std::fs::File;
@@ -77,9 +79,17 @@ pub(crate) struct Cli {
     #[arg(long)]
     all_repo: bool,
 
-    /// Print output size (bytes) and word count to stderr upon completion.
-    #[arg(short = 's', long, action = clap::ArgAction::SetTrue)]
-    print_stats: bool,
+    /// Print statistics to stderr. Accepts reports such as `overview` and `top-files=N`.
+    /// With no values, prints the default bundle (`overview` plus `top-files=5`).
+    #[arg(
+        short = 's',
+        long,
+        value_name = "REPORT",
+        num_args = 0..,
+        default_missing_value = "__default__",
+        value_parser = parse_stats_report_spec
+    )]
+    stats: Option<Vec<StatsReportSpec>>,
 
     /// Disable loading of global/local configuration files.
     #[arg(long)]
@@ -176,20 +186,24 @@ fn main() -> Result<()> {
     }
 
     // Call Library
-    let combined_content = match grab_contents(&config) {
-        Ok(content) => content,
+    let grab_output = match grab_contents_detailed(&config) {
+        Ok(output) => output,
         Err(e) => {
             error!("Error during dirgrab operation: {}", e);
             return Err(e.into());
         }
     };
+    let GrabOutput {
+        content: combined_content,
+        files: file_segments,
+    } = grab_output;
 
     // Check if content is empty *after* potential tree generation
     if combined_content.is_empty() {
         info!("No content was generated.");
         // Print stats even if empty, but only if requested
         if stats_settings.enabled {
-            eprintln!("Output Size: 0 bytes, 0 words");
+            eprintln!("Output Size: 0 bytes, 0 words, tokens≈0");
         }
         return Ok(());
     }
@@ -224,20 +238,12 @@ fn main() -> Result<()> {
 
     // Calculate and print stats to stderr *only if requested*
     if stats_settings.enabled {
-        let byte_count = combined_content.len();
-        // Simple word count based on whitespace splitting
-        let word_count = combined_content.split_whitespace().count();
-        let token_basis = build_token_basis(&combined_content, &config, &stats_settings);
-        let char_count = token_basis.chars().count();
-        let approx_tokens = if char_count == 0 {
-            0
-        } else {
-            (char_count as f64 / stats_settings.token_ratio).ceil() as usize
-        };
-        let ratio_display = format_ratio(stats_settings.token_ratio);
-        eprintln!(
-            "Output Size (to {}): {} bytes, {} words, tokens≈{} (ratio={})",
-            output_destination, byte_count, word_count, approx_tokens, ratio_display
+        print_stats_reports(
+            &combined_content,
+            &file_segments,
+            &config,
+            &stats_settings,
+            &output_destination,
         );
     }
 
@@ -298,6 +304,123 @@ fn format_ratio(ratio: f64) -> String {
     }
 }
 
+fn print_stats_reports(
+    combined_content: &str,
+    file_segments: &[GrabbedFile],
+    config: &GrabConfig,
+    stats: &StatsSettings,
+    output_destination: &str,
+) {
+    let byte_count = combined_content.len();
+    let word_count = combined_content.split_whitespace().count();
+    let token_basis = build_token_basis(combined_content, config, stats);
+    let char_count = token_basis.chars().count();
+    let approx_tokens = if char_count == 0 {
+        0
+    } else {
+        (char_count as f64 / stats.token_ratio).ceil() as usize
+    };
+    let ratio_display = format_ratio(stats.token_ratio);
+
+    let mut first_report = true;
+    for report in &stats.reports {
+        if !first_report {
+            eprintln!();
+        }
+        match report {
+            StatsReport::Overview => {
+                eprintln!(
+                    "Output Size (to {}): {} bytes, {} words, tokens≈{} (ratio={})",
+                    output_destination, byte_count, word_count, approx_tokens, ratio_display
+                );
+            }
+            StatsReport::TopFiles { count } => {
+                print_top_files_report(combined_content, file_segments, stats, *count);
+            }
+        }
+        first_report = false;
+    }
+}
+
+fn print_top_files_report(
+    combined_content: &str,
+    file_segments: &[GrabbedFile],
+    stats: &StatsSettings,
+    max_files: usize,
+) {
+    let mut entries = compute_file_token_stats(combined_content, file_segments, stats);
+    if entries.is_empty() {
+        eprintln!(
+            "Top {} files by tokens: no file content captured.",
+            max_files
+        );
+        return;
+    }
+
+    entries.sort_by(|a, b| {
+        b.approx_tokens
+            .cmp(&a.approx_tokens)
+            .then_with(|| b.char_count.cmp(&a.char_count))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+
+    let display_count = entries.len().min(max_files);
+    eprintln!(
+        "Top {} files by tokens (ratio={}):",
+        display_count,
+        format_ratio(stats.token_ratio)
+    );
+    for (idx, entry) in entries.into_iter().take(display_count).enumerate() {
+        eprintln!(
+            "{}. {} — tokens≈{} (chars={})",
+            idx + 1,
+            entry.path,
+            entry.approx_tokens,
+            entry.char_count
+        );
+    }
+}
+
+struct FileTokenStat<'a> {
+    path: &'a str,
+    approx_tokens: usize,
+    char_count: usize,
+}
+
+fn compute_file_token_stats<'a>(
+    combined_content: &'a str,
+    file_segments: &'a [GrabbedFile],
+    stats: &StatsSettings,
+) -> Vec<FileTokenStat<'a>> {
+    let mut results = Vec::with_capacity(file_segments.len());
+    for segment in file_segments {
+        let range = if stats.exclude_headers {
+            segment.body_range.clone()
+        } else {
+            segment.full_range.clone()
+        };
+        if range.start >= range.end {
+            continue;
+        }
+
+        let slice = &combined_content[range.clone()];
+        if slice.is_empty() {
+            continue;
+        }
+        let char_count = slice.chars().count();
+        if char_count == 0 {
+            continue;
+        }
+        let approx_tokens = (char_count as f64 / stats.token_ratio).ceil() as usize;
+        results.push(FileTokenStat {
+            path: &segment.display_path,
+            approx_tokens,
+            char_count,
+        });
+    }
+    results
+}
+
 #[cfg(test)]
 impl Cli {
     fn test_default() -> Self {
@@ -313,7 +436,7 @@ impl Cli {
             no_git: false,
             tracked_only: false,
             all_repo: false,
-            print_stats: false,
+            stats: None,
             no_config: false,
             config_path: None,
             token_ratio: None,
@@ -324,3 +447,42 @@ impl Cli {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_token_stats_honor_header_exclusion() {
+        let header = format!("--- FILE: {} ---\n", "foo.txt");
+        let body = "hello world\n\n";
+        let content = format!("{}{}", header, body);
+        let file = GrabbedFile {
+            display_path: "foo.txt".to_string(),
+            full_range: 0..content.len(),
+            header_range: Some(0..header.len()),
+            body_range: header.len()..content.len(),
+        };
+
+        let mut stats = StatsSettings {
+            enabled: true,
+            token_ratio: 5.0,
+            exclude_tree: false,
+            exclude_headers: false,
+            reports: vec![StatsReport::Overview],
+        };
+
+        let files = [file.clone()];
+        let with_headers = compute_file_token_stats(&content, &files, &stats);
+        assert_eq!(with_headers.len(), 1);
+        assert_eq!(with_headers[0].char_count, content.chars().count());
+
+        stats.exclude_headers = true;
+        let files_no_header = [file];
+        let without_headers = compute_file_token_stats(&content, &files_no_header, &stats);
+        assert_eq!(without_headers.len(), 1);
+        assert_eq!(without_headers[0].char_count, body.chars().count());
+    }
+}
+
+// Custom parsers for --stats live in config_loader to share logic with config files.
