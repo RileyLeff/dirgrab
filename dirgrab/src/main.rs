@@ -361,7 +361,7 @@ fn print_top_files_report(
         b.approx_tokens
             .cmp(&a.approx_tokens)
             .then_with(|| b.char_count.cmp(&a.char_count))
-            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.path.cmp(b.path))
     });
 
     let display_count = entries.len().min(max_files);
