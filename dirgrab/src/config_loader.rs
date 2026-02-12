@@ -7,7 +7,7 @@ use directories::BaseDirs;
 use log::{debug, warn};
 use serde::Deserialize;
 
-use dirgrab_lib::GrabConfig;
+use dirgrab_lib::{normalize_glob, GrabConfig};
 
 use crate::Cli;
 
@@ -301,10 +301,6 @@ impl PatternAccumulator {
     fn into_vec(self) -> Vec<String> {
         self.patterns
     }
-}
-
-fn normalize_glob(pattern: &str) -> String {
-    pattern.replace('\\', "/")
 }
 
 fn apply_config_file(

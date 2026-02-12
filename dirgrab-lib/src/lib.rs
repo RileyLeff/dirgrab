@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 // Re-export public API components
 pub use config::GrabConfig;
 pub use errors::{GrabError, GrabResult};
+pub use listing::normalize_glob;
 
 #[derive(Debug, Clone)]
 pub struct GrabbedFile {

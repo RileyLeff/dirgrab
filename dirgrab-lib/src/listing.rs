@@ -335,6 +335,8 @@ fn prefix_for_git(pattern: &str) -> String {
     }
 }
 
-fn normalize_glob(pattern: &str) -> String {
+/// Normalizes a glob pattern by replacing backslashes with forward slashes.
+/// Used to ensure consistent pattern matching across platforms.
+pub fn normalize_glob(pattern: &str) -> String {
     pattern.replace('\\', "/")
 }
