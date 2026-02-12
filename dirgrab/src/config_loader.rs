@@ -155,6 +155,16 @@ pub fn build_run_settings(cli: &Cli, target_path: &Path) -> Result<RunSettings> 
         flags.include_untracked = true;
     }
 
+    // Warn about git-specific flags that have no effect with --no-git
+    if cli.no_git {
+        if cli.all_repo {
+            warn!("--all-repo has no effect when --no-git is set");
+        }
+        if cli.tracked_only {
+            warn!("--tracked-only has no effect when --no-git is set");
+        }
+    }
+
     // CLI excludes
     for pattern in &cli.exclude_patterns {
         patterns.push(pattern);
@@ -625,6 +635,32 @@ tokens_exclude = ["tree"]
                 }
             ]
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_git_with_git_flags_still_builds_successfully() -> Result<()> {
+        let temp = tempdir()?;
+        let target = temp.path().join("project");
+        fs::create_dir_all(&target)?;
+
+        let _guards = isolate_env(temp.path());
+
+        let mut cli = Cli::test_default();
+        cli.no_git = true;
+        cli.all_repo = true;
+        // tracked_only conflicts with include_untracked_flag at clap level,
+        // but can still be set directly for config_loader testing
+        cli.tracked_only = true;
+
+        let settings = build_run_settings(&cli, &target)?;
+        let config = settings.grab_config;
+
+        // Config should build without error; flags are accepted but warnings emitted
+        assert!(config.no_git);
+        assert!(config.all_repo);
+        assert!(!config.include_untracked); // tracked_only sets this to false
 
         Ok(())
     }
