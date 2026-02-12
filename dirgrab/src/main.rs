@@ -284,7 +284,7 @@ fn strip_header_lines(content: &str) -> String {
         .split_inclusive('\n')
         .filter(|chunk| {
             let line = chunk.trim_end_matches('\n');
-            !line.starts_with("--- FILE: ")
+            !(line.starts_with("--- FILE: ") && line.ends_with(" ---"))
         })
         .collect()
 }
@@ -488,6 +488,29 @@ mod tests {
     fn exclude_flag_accepts_multiple_tokens() {
         let cli = Cli::parse_from(["dirgrab", "-e", "foo", "bar", "-e", "baz"]);
         assert_eq!(cli.exclude_patterns, vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
+    fn strip_header_lines_removes_real_headers() {
+        let content = "--- FILE: foo.txt ---\nhello world\n--- FILE: bar.rs ---\nfn main() {}\n";
+        let result = strip_header_lines(content);
+        assert_eq!(result, "hello world\nfn main() {}\n");
+    }
+
+    #[test]
+    fn strip_header_lines_keeps_prefix_only_lines() {
+        // A line that starts with "--- FILE: " but doesn't end with " ---"
+        // should NOT be stripped (it's file content, not a header)
+        let content = "--- FILE: this is not a header\nhello\n--- FILE: real.txt ---\nworld\n";
+        let result = strip_header_lines(content);
+        assert_eq!(result, "--- FILE: this is not a header\nhello\nworld\n");
+    }
+
+    #[test]
+    fn strip_header_lines_handles_pdf_headers() {
+        let content = "--- FILE: doc.pdf (extracted text) ---\npdf content\n";
+        let result = strip_header_lines(content);
+        assert_eq!(result, "pdf content\n");
     }
 }
 
