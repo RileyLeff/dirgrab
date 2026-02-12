@@ -1569,6 +1569,49 @@ DIRECTORY STRUCTURE
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_walkdir_rejects_symlinks_outside_target() -> Result<()> {
+        let outer_dir = tempdir()?;
+        let outside = outer_dir.path().join("outside");
+        fs::create_dir_all(&outside)?;
+        fs::write(outside.join("secret.txt"), "secret content")?;
+
+        let target = outer_dir.path().join("project");
+        fs::create_dir_all(&target)?;
+        fs::write(target.join("local.txt"), "local content")?;
+
+        // Create a symlink inside project/ that points to the outside directory
+        std::os::unix::fs::symlink(&outside, target.join("escape_link"))?;
+
+        let config = GrabConfig {
+            target_path: target.clone(),
+            add_headers: false,
+            exclude_patterns: vec![],
+            include_untracked: false,
+            include_default_output: true,
+            no_git: true,
+            include_tree: false,
+            convert_pdf: false,
+            all_repo: false,
+        };
+        let files = crate::listing::list_files_walkdir(&target, &config)?;
+        let filenames: Vec<String> = files
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect();
+
+        assert!(
+            filenames.contains(&"local.txt".to_string()),
+            "local file should be included"
+        );
+        assert!(
+            !filenames.contains(&"secret.txt".to_string()),
+            "file from outside target directory should NOT be included via symlink"
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_pdf_failure_segment_consistency() -> Result<()> {
         let (_dir, path) = setup_test_dir()?;

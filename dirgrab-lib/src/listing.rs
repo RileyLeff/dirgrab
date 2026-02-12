@@ -174,6 +174,11 @@ pub(crate) fn list_files_walkdir(
         .build()
         .map_err(GrabError::GlobMatcherBuildError)?;
 
+    // Canonicalize the target to use as a boundary check for symlinks.
+    let canonical_root = target_path
+        .canonicalize()
+        .unwrap_or_else(|_| target_path.to_path_buf());
+
     // Walk directory while pruning ignored subtrees early.
     // follow_links(true) matches Git mode behavior where symlinked files are included.
     // Walkdir detects circular symlinks and emits errors, which we handle below.
@@ -195,6 +200,22 @@ pub(crate) fn list_files_walkdir(
         };
 
         let path = entry.path();
+
+        // Boundary check: if a symlink resolves outside the target directory, skip it.
+        if entry.path_is_symlink() {
+            if let Ok(canonical) = path.canonicalize() {
+                if !canonical.starts_with(&canonical_root) {
+                    debug!(
+                        "Skipping symlink that escapes target directory: {:?} -> {:?}",
+                        path, canonical
+                    );
+                    if entry.file_type().is_dir() {
+                        walker.skip_current_dir();
+                    }
+                    continue;
+                }
+            }
+        }
 
         if entry.file_type().is_dir() {
             if matches!(

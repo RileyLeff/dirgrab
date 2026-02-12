@@ -175,14 +175,12 @@ pub fn build_run_settings(cli: &Cli, target_path: &Path) -> Result<RunSettings> 
         }
     }
 
-    // Auto-exclude active output file basename unless explicitly included
+    // Always auto-exclude the active output file to prevent self-ingestion.
+    // This is separate from the default "dirgrab.txt" exclusion controlled by
+    // --include-default-output; the active output file is ALWAYS excluded.
     if let Some(ref output_path) = cli.output {
         if let Some(name) = output_path.file_name().and_then(|n| n.to_str()) {
-            let should_skip_default =
-                name.eq_ignore_ascii_case("dirgrab.txt") && flags.include_default_output;
-            if !should_skip_default {
-                patterns.push(name);
-            }
+            patterns.push(name);
         }
     }
 
@@ -691,6 +689,34 @@ tokens_exclude = ["tree"]
 
         assert!(patterns.contains("*.log"));
         assert!(patterns.contains("target/"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn active_output_always_excluded_even_with_include_default_output() -> Result<()> {
+        let temp = tempdir()?;
+        let target = temp.path().join("project");
+        fs::create_dir_all(&target)?;
+
+        let _guards = isolate_env(temp.path());
+
+        let mut cli = Cli::test_default();
+        cli.include_default_output = true;
+        cli.output = Some(PathBuf::from("dirgrab.txt"));
+
+        let settings = build_run_settings(&cli, &target)?;
+        let patterns: HashSet<_> = settings
+            .grab_config
+            .exclude_patterns
+            .iter()
+            .cloned()
+            .collect();
+
+        assert!(
+            patterns.contains("dirgrab.txt"),
+            "active output file should always be excluded, even with --include-default-output"
+        );
 
         Ok(())
     }

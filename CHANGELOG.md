@@ -38,6 +38,12 @@ open issues and milestones.
 - Added warnings when `--all-repo` or `--tracked-only` are used with
   `--no-git` (these flags have no effect in plain directory mode).
 - Documented that `-o` auto-excludes the output filename from the grab.
+- Fixed symlink boundary traversal in `--no-git` mode: symlinks that resolve
+  outside the target directory are now skipped, preventing unintended file
+  inclusion from external paths.
+- Fixed active output file always being excluded, even when
+  `--include-default-output` is set. Previously `-o dirgrab.txt
+  --include-default-output` could re-ingest the output file.
 
 ## [0.3.2] - 2025-02-15
 
