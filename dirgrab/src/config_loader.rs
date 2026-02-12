@@ -656,7 +656,12 @@ tokens_exclude = ["tree"]
         cli.exclude_patterns = vec!["*.log,target/,*.tmp".to_string()];
 
         let settings = build_run_settings(&cli, &target)?;
-        let patterns: HashSet<_> = settings.grab_config.exclude_patterns.iter().cloned().collect();
+        let patterns: HashSet<_> = settings
+            .grab_config
+            .exclude_patterns
+            .iter()
+            .cloned()
+            .collect();
 
         assert!(patterns.contains("*.log"), "*.log should be present");
         assert!(patterns.contains("target/"), "target/ should be present");
@@ -677,7 +682,12 @@ tokens_exclude = ["tree"]
         cli.exclude_patterns = vec!["*.log".to_string(), "target/".to_string()];
 
         let settings = build_run_settings(&cli, &target)?;
-        let patterns: HashSet<_> = settings.grab_config.exclude_patterns.iter().cloned().collect();
+        let patterns: HashSet<_> = settings
+            .grab_config
+            .exclude_patterns
+            .iter()
+            .cloned()
+            .collect();
 
         assert!(patterns.contains("*.log"));
         assert!(patterns.contains("target/"));

@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "dirgrab"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "dirgrab-lib"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "ignore",

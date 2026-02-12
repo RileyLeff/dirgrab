@@ -518,10 +518,7 @@ mod tests {
     #[test]
     fn tracked_only_conflicts_with_include_untracked() {
         let result = Cli::try_parse_from(["dirgrab", "--tracked-only", "-u"]);
-        assert!(
-            result.is_err(),
-            "--tracked-only and -u should conflict"
-        );
+        assert!(result.is_err(), "--tracked-only and -u should conflict");
     }
 
     #[test]

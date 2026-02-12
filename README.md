@@ -49,10 +49,12 @@ dirgrab [OPTIONS] [TARGET_PATH]
 - `-o, --output [FILE]` – write to a file (defaults to `dirgrab.txt` if no name is given). Conflicts with `--clipboard`.
 - `-c, --clipboard` – copy to the system clipboard instead of stdout or a file.
 - `--no-headers` / `--no-tree` / `--no-pdf` – disable headers, the directory tree, or PDF extraction.
+- `-l, --list` – preview which files would be included (one per line) without generating content.
 - `-e, --exclude <PATTERN>` – add glob-style excludes (applied after config files).
-  You can follow a single `-e` with multiple patterns (e.g. `-e foo bar baz`).
-  Quote shell globs (e.g. `-e 'integration_tests/*'`) so your shell passes the pattern instead of expanding it.
-- `--tracked-only` – Git mode: limit to tracked files. (Compatibility note: `-u/--include-untracked` still forces inclusion if you need it.)
+  Supports comma-separated patterns: `-e '*.log,target/,*.tmp'`.
+  Can also be repeated: `-e '*.log' -e 'target/'`.
+  Quote patterns to prevent shell glob expansion.
+- `--tracked-only` – Git mode: limit to tracked files.
 - `--all-repo` – Git mode: operate on the entire repository even if the target is a subdirectory.
 - `--include-default-output` – allow `dirgrab.txt` back into the run.
 - `--no-git` – ignore Git context entirely and walk the filesystem.
@@ -104,7 +106,7 @@ reports = ["overview", "top-files=8"]
 dirgrab -s
 
 # Limit to tracked files only and exclude build artifacts
-dirgrab --tracked-only -e "*.log" -e "target/"
+dirgrab --tracked-only -e '*.log,target/'
 
 # Force a whole-repo snapshot from within a subdirectory
 dirgrab --all-repo
@@ -112,8 +114,11 @@ dirgrab --all-repo
 # Plain directory mode with custom excludes, writing to the default file
 dirgrab --no-git -e "*.tmp" -o
 
-# Use project defaults but ignore configs for a “clean” run
+# Use project defaults but ignore configs for a "clean" run
 dirgrab --no-config --no-tree --no-headers
+
+# Preview which files would be included before grabbing
+dirgrab -l -e '*.lock,target/'
 ```
 
 ## Behaviour Notes

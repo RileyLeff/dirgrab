@@ -4,6 +4,41 @@ All notable changes to this project are tracked here. New releases follow
 semantic versioning (major.minor.patch). For details on upcoming work, check
 open issues and milestones.
 
+## [0.4.0] - 2026-02-11
+
+### Breaking Changes
+
+- **`-e/--exclude` no longer greedily consumes multiple arguments.** Each `-e`
+  takes exactly one value. Use comma-separated patterns for convenience:
+  `-e "*.log,target/,*.tmp"`. Previously, `dirgrab -e foo bar` treated both
+  `foo` and `bar` as exclude patterns; now `bar` is correctly interpreted as
+  the target path.
+- **`--tracked-only` and `-u/--include-untracked` now conflict.** Passing both
+  produces a clear error instead of silently letting `-u` win.
+
+### New Features
+
+- Added `-l/--list` flag for dry-run file listing. Prints one file path per
+  line without reading contents — useful for verifying exclude patterns before
+  a full grab.
+- Added `list_files()` public API to `dirgrab-lib` for programmatic file
+  listing without content processing.
+- Output format is now documented in `--help` (via `after_long_help`).
+
+### Bug Fixes
+
+- Fixed symlink handling in `--no-git` mode: symlinks are now followed,
+  matching Git mode behavior. Circular symlinks are detected and skipped.
+- Fixed PDF extraction failure producing inconsistent segment metadata
+  (header/body byte ranges now match the structure of successful files).
+- Made `strip_header_lines` (used for `--tokens-exclude-headers`) more
+  robust: only strips lines matching both the `--- FILE: ` prefix and
+  ` ---` suffix, preventing false positives in file content.
+- Deduplicated `normalize_glob` across library and binary crates.
+- Added warnings when `--all-repo` or `--tracked-only` are used with
+  `--no-git` (these flags have no effect in plain directory mode).
+- Documented that `-o` auto-excludes the output filename from the grab.
+
 ## [0.3.2] - 2025-02-15
 
 - Fixed `-e/--exclude` so a single flag can absorb every shell-expanded

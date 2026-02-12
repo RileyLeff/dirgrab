@@ -37,9 +37,7 @@ pub struct GrabOutput {
 
 /// Shared file-discovery logic: canonicalizes target, detects git repo,
 /// lists files. Returns (absolute file paths, repo root if any, canonical target).
-fn discover_files(
-    config: &GrabConfig,
-) -> GrabResult<(Vec<PathBuf>, Option<PathBuf>, PathBuf)> {
+fn discover_files(config: &GrabConfig) -> GrabResult<(Vec<PathBuf>, Option<PathBuf>, PathBuf)> {
     let target_path = config.target_path.canonicalize().map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             GrabError::TargetPathNotFound(config.target_path.clone())
