@@ -175,7 +175,9 @@ pub(crate) fn list_files_walkdir(
         .map_err(GrabError::GlobMatcherBuildError)?;
 
     // Walk directory while pruning ignored subtrees early.
-    let mut walker = WalkDir::new(target_path).into_iter();
+    // follow_links(true) matches Git mode behavior where symlinked files are included.
+    // Walkdir detects circular symlinks and emits errors, which we handle below.
+    let mut walker = WalkDir::new(target_path).follow_links(true).into_iter();
     while let Some(entry_result) = walker.next() {
         let entry = match entry_result {
             Ok(entry) => entry,

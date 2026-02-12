@@ -1470,6 +1470,43 @@ DIRECTORY STRUCTURE
 
         Ok(())
     }
+    #[cfg(unix)]
+    #[test]
+    fn test_walkdir_follows_symlinks() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().to_path_buf();
+
+        fs::write(path.join("real_file.txt"), "real content")?;
+        std::os::unix::fs::symlink(path.join("real_file.txt"), path.join("link.txt"))?;
+
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: false,
+            exclude_patterns: vec![],
+            include_untracked: false,
+            include_default_output: true,
+            no_git: true,
+            include_tree: false,
+            convert_pdf: false,
+            all_repo: false,
+        };
+        let files = crate::listing::list_files_walkdir(&path, &config)?;
+        let filenames: Vec<String> = files
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect();
+
+        assert!(
+            filenames.contains(&"real_file.txt".to_string()),
+            "real file should be included"
+        );
+        assert!(
+            filenames.contains(&"link.txt".to_string()),
+            "symlink should be followed and included"
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_pdf_failure_segment_consistency() -> Result<()> {
         let (_dir, path) = setup_test_dir()?;
