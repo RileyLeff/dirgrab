@@ -165,9 +165,14 @@ pub fn build_run_settings(cli: &Cli, target_path: &Path) -> Result<RunSettings> 
         }
     }
 
-    // CLI excludes
-    for pattern in &cli.exclude_patterns {
-        patterns.push(pattern);
+    // CLI excludes — support comma-separated patterns (e.g. -e "*.log,target/")
+    for raw in &cli.exclude_patterns {
+        for part in raw.split(',') {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                patterns.push(trimmed);
+            }
+        }
     }
 
     // Auto-exclude active output file basename unless explicitly included
@@ -635,6 +640,47 @@ tokens_exclude = ["tree"]
                 }
             ]
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn comma_separated_exclude_patterns_are_split() -> Result<()> {
+        let temp = tempdir()?;
+        let target = temp.path().join("project");
+        fs::create_dir_all(&target)?;
+
+        let _guards = isolate_env(temp.path());
+
+        let mut cli = Cli::test_default();
+        cli.exclude_patterns = vec!["*.log,target/,*.tmp".to_string()];
+
+        let settings = build_run_settings(&cli, &target)?;
+        let patterns: HashSet<_> = settings.grab_config.exclude_patterns.iter().cloned().collect();
+
+        assert!(patterns.contains("*.log"), "*.log should be present");
+        assert!(patterns.contains("target/"), "target/ should be present");
+        assert!(patterns.contains("*.tmp"), "*.tmp should be present");
+
+        Ok(())
+    }
+
+    #[test]
+    fn multiple_e_flags_still_work() -> Result<()> {
+        let temp = tempdir()?;
+        let target = temp.path().join("project");
+        fs::create_dir_all(&target)?;
+
+        let _guards = isolate_env(temp.path());
+
+        let mut cli = Cli::test_default();
+        cli.exclude_patterns = vec!["*.log".to_string(), "target/".to_string()];
+
+        let settings = build_run_settings(&cli, &target)?;
+        let patterns: HashSet<_> = settings.grab_config.exclude_patterns.iter().cloned().collect();
+
+        assert!(patterns.contains("*.log"));
+        assert!(patterns.contains("target/"));
 
         Ok(())
     }

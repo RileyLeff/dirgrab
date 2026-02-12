@@ -58,8 +58,9 @@ pub(crate) struct Cli {
     no_pdf: bool,
 
     /// Add patterns to exclude files or directories. Can be used multiple times.
-    /// Uses .gitignore glob syntax. Examples: -e "*.log" -e "target/"
-    #[arg(short = 'e', long = "exclude", value_name = "PATTERN", num_args = 1..)]
+    /// Supports comma-separated patterns: -e "*.log,target/,*.tmp"
+    /// Uses .gitignore glob syntax. Quote patterns to prevent shell expansion.
+    #[arg(short = 'e', long = "exclude", value_name = "PATTERN")]
     exclude_patterns: Vec<String>,
 
     /// Include the default output file ('dirgrab.txt') if it exists and isn't otherwise excluded.
@@ -485,9 +486,17 @@ mod tests {
     }
 
     #[test]
-    fn exclude_flag_accepts_multiple_tokens() {
-        let cli = Cli::parse_from(["dirgrab", "-e", "foo", "bar", "-e", "baz"]);
-        assert_eq!(cli.exclude_patterns, vec!["foo", "bar", "baz"]);
+    fn exclude_flag_each_e_takes_one_value() {
+        let cli = Cli::parse_from(["dirgrab", "-e", "foo", "-e", "bar"]);
+        assert_eq!(cli.exclude_patterns, vec!["foo", "bar"]);
+    }
+
+    #[test]
+    fn exclude_flag_positional_not_eaten() {
+        // With num_args removed, "somedir" should be the target path, not an exclude
+        let cli = Cli::parse_from(["dirgrab", "-e", "*.log", "somedir"]);
+        assert_eq!(cli.exclude_patterns, vec!["*.log"]);
+        assert_eq!(cli.target_path, Some(PathBuf::from("somedir")));
     }
 
     #[test]
