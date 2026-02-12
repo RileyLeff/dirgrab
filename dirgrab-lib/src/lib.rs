@@ -1470,4 +1470,62 @@ DIRECTORY STRUCTURE
 
         Ok(())
     }
+    #[test]
+    fn test_pdf_failure_segment_consistency() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        // Create a file with .pdf extension but invalid PDF content
+        fs::write(path.join("bad.pdf"), "this is not a valid pdf")?;
+        fs::write(path.join("good.txt"), "hello world")?;
+
+        let files = vec![path.join("bad.pdf"), path.join("good.txt")];
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: true,
+            exclude_patterns: vec![],
+            include_untracked: false,
+            include_default_output: false,
+            no_git: true,
+            include_tree: false,
+            convert_pdf: true, // Enable PDF extraction (will fail on bad.pdf)
+            all_repo: false,
+        };
+
+        let result = crate::processing::process_files(&files, &config, None, &path)?;
+
+        // Both files should produce segments
+        assert_eq!(result.files.len(), 2, "Expected 2 file segments");
+
+        let pdf_seg = &result.files[0];
+        let txt_seg = &result.files[1];
+
+        // PDF failure: header should end with \n (not \n\n)
+        let header = &result.content[pdf_seg.header_range.clone().unwrap()];
+        assert!(
+            header.ends_with("---\n"),
+            "PDF failure header should end with ---\\n, got: {:?}",
+            header
+        );
+        // PDF failure: body_range should be non-empty (contains trailing \n)
+        assert!(
+            !pdf_seg.body_range.is_empty(),
+            "PDF failure body_range should not be empty"
+        );
+        let body = &result.content[pdf_seg.body_range.clone()];
+        assert_eq!(body, "\n", "PDF failure body should be a single newline");
+
+        // Successful file: header should also end with \n
+        let txt_header = &result.content[txt_seg.header_range.clone().unwrap()];
+        assert!(
+            txt_header.ends_with("---\n"),
+            "Normal header should end with ---\\n, got: {:?}",
+            txt_header
+        );
+        // Successful file: body_range should be non-empty
+        assert!(
+            !txt_seg.body_range.is_empty(),
+            "Normal body_range should not be empty"
+        );
+
+        Ok(())
+    }
 } // End of mod tests

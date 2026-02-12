@@ -90,15 +90,16 @@ pub(crate) fn process_files(
                     );
                     if config.add_headers {
                         let header = format!(
-                            "--- FILE: {} (PDF extraction failed) ---\n\n",
+                            "--- FILE: {} (PDF extraction failed) ---\n",
                             display_path_ref
                         );
                         let start = combined_content.len();
                         combined_content.push_str(&header);
                         header_range = Some(start..combined_content.len());
                     }
-                    let empty = combined_content.len();
-                    body_range = empty..empty;
+                    let body_start = combined_content.len();
+                    combined_content.push('\n');
+                    body_range = body_start..combined_content.len();
                 }
             }
         } else {
