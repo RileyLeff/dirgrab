@@ -72,7 +72,7 @@ pub(crate) struct Cli {
     no_git: bool,
 
     /// Limit Git mode to tracked files only.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "include_untracked_flag")]
     tracked_only: bool,
 
     /// Operate on the entire repository even if TARGET_PATH is a subdirectory.
@@ -488,6 +488,15 @@ mod tests {
     fn exclude_flag_accepts_multiple_tokens() {
         let cli = Cli::parse_from(["dirgrab", "-e", "foo", "bar", "-e", "baz"]);
         assert_eq!(cli.exclude_patterns, vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
+    fn tracked_only_conflicts_with_include_untracked() {
+        let result = Cli::try_parse_from(["dirgrab", "--tracked-only", "-u"]);
+        assert!(
+            result.is_err(),
+            "--tracked-only and -u should conflict"
+        );
     }
 
     #[test]
