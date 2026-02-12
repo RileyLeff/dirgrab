@@ -6,7 +6,7 @@ use clap::Parser;
 use config_loader::{
     build_run_settings, parse_stats_report_spec, StatsReport, StatsReportSpec, StatsSettings,
 };
-use dirgrab_lib::{grab_contents_detailed, GrabConfig, GrabOutput, GrabbedFile};
+use dirgrab_lib::{grab_contents_detailed, list_files, GrabConfig, GrabOutput, GrabbedFile};
 use log::{debug, error, info, LevelFilter};
 use std::borrow::Cow;
 use std::fs::File;
@@ -44,6 +44,11 @@ pub(crate) struct Cli {
     /// Copy output to the system clipboard instead of stdout or a file.
     #[arg(short = 'c', long, conflicts_with = "output")]
     clipboard: bool,
+
+    /// List the files that would be included, one per line, without content.
+    /// Useful for previewing file selection before a full grab.
+    #[arg(short = 'l', long, conflicts_with_all = ["clipboard", "output"])]
+    list: bool,
 
     /// Disable the default inclusion of '--- FILE: `<filename>` ---' headers.
     #[arg(long)]
@@ -184,6 +189,15 @@ fn main() -> Result<()> {
 
     if config.all_repo {
         info!("Git scope set to entire repository (--all-repo).");
+    }
+
+    // Handle --list mode: print file paths and exit early
+    if cli.list {
+        let paths = list_files(&config).context("Failed to list files")?;
+        for path in &paths {
+            println!("{}", path);
+        }
+        return Ok(());
     }
 
     // Call Library
@@ -429,6 +443,7 @@ impl Cli {
             target_path: None,
             output: None,
             clipboard: false,
+            list: false,
             no_headers: false,
             no_tree: false,
             no_pdf: false,

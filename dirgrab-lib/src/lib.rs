@@ -33,18 +33,13 @@ pub struct GrabOutput {
     pub files: Vec<GrabbedFile>,
 }
 
-// --- Main Public Function ---
+// --- Internal helpers ---
 
-/// Performs the main `dirgrab` operation based on the provided configuration.
-pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
-    grab_contents_detailed(config).map(|output| output.content)
-}
-
-/// Performs the main `dirgrab` operation and returns file-level metadata along with the content.
-pub fn grab_contents_detailed(config: &GrabConfig) -> GrabResult<GrabOutput> {
-    info!("Starting dirgrab operation with config: {:?}", config);
-
-    // Canonicalize cleans the path and checks existence implicitly via OS call
+/// Shared file-discovery logic: canonicalizes target, detects git repo,
+/// lists files. Returns (absolute file paths, repo root if any, canonical target).
+fn discover_files(
+    config: &GrabConfig,
+) -> GrabResult<(Vec<PathBuf>, Option<PathBuf>, PathBuf)> {
     let target_path = config.target_path.canonicalize().map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             GrabError::TargetPathNotFound(config.target_path.clone())
@@ -57,8 +52,7 @@ pub fn grab_contents_detailed(config: &GrabConfig) -> GrabResult<GrabOutput> {
     })?;
     debug!("Canonical target path: {:?}", target_path);
 
-    // Determine file listing mode and potential repo root based on no_git flag
-    let (files_to_process, maybe_repo_root) = if config.no_git {
+    let (files, maybe_repo_root) = if config.no_git {
         info!("Ignoring Git context due to --no-git flag.");
         let files = listing::list_files_walkdir(&target_path, config)?;
         (files, None)
@@ -88,7 +82,45 @@ pub fn grab_contents_detailed(config: &GrabConfig) -> GrabResult<GrabOutput> {
         (files, git_repo_root)
     };
 
-    info!("Found {} files to process.", files_to_process.len());
+    info!("Found {} files.", files.len());
+    Ok((files, maybe_repo_root, target_path))
+}
+
+/// Computes a display path for a file (relative to repo root or target path).
+fn display_path(file_path: &Path, repo_root: Option<&Path>, target_path: &Path) -> String {
+    let base = repo_root.unwrap_or(target_path);
+    let rel = file_path.strip_prefix(base).unwrap_or(file_path);
+    let raw = rel.to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '\\' && raw.contains('\\') {
+        raw.replace('\\', "/")
+    } else {
+        raw.into_owned()
+    }
+}
+
+// --- Main Public Functions ---
+
+/// Lists the files that would be included by `dirgrab` without reading their contents.
+/// Returns display paths (relative to repo root in Git mode, or target path otherwise).
+pub fn list_files(config: &GrabConfig) -> GrabResult<Vec<String>> {
+    info!("Listing files with config: {:?}", config);
+    let (files, maybe_repo_root, target_path) = discover_files(config)?;
+    Ok(files
+        .iter()
+        .map(|f| display_path(f, maybe_repo_root.as_deref(), &target_path))
+        .collect())
+}
+
+/// Performs the main `dirgrab` operation based on the provided configuration.
+pub fn grab_contents(config: &GrabConfig) -> GrabResult<String> {
+    grab_contents_detailed(config).map(|output| output.content)
+}
+
+/// Performs the main `dirgrab` operation and returns file-level metadata along with the content.
+pub fn grab_contents_detailed(config: &GrabConfig) -> GrabResult<GrabOutput> {
+    info!("Starting dirgrab operation with config: {:?}", config);
+
+    let (files_to_process, maybe_repo_root, target_path) = discover_files(config)?;
 
     // Initialize output buffer
     let mut output_buffer = String::new();
@@ -1470,6 +1502,38 @@ DIRECTORY STRUCTURE
 
         Ok(())
     }
+    #[test]
+    fn test_list_files_returns_display_paths() -> Result<()> {
+        let (_dir, path) = setup_test_dir()?;
+        let config = GrabConfig {
+            target_path: path.clone(),
+            add_headers: false,
+            exclude_patterns: vec![
+                "*.log".to_string(),
+                "*.dat".to_string(),
+                "dirgrab.txt".to_string(),
+            ],
+            include_untracked: false,
+            include_default_output: false,
+            no_git: true,
+            include_tree: false,
+            convert_pdf: false,
+            all_repo: false,
+        };
+        let paths = list_files(&config)?;
+
+        // Should return relative display paths, sorted
+        assert!(paths.contains(&"file1.txt".to_string()));
+        assert!(paths.contains(&"file2.rs".to_string()));
+        assert!(paths.contains(&"subdir/another.txt".to_string()));
+        // Excluded files should not appear
+        assert!(!paths.iter().any(|p| p.ends_with(".log")));
+        assert!(!paths.iter().any(|p| p.ends_with(".dat")));
+        assert!(!paths.iter().any(|p| p.contains("dirgrab.txt")));
+
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_walkdir_follows_symlinks() -> Result<()> {
